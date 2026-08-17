@@ -50,3 +50,11 @@ jobs:
       vocabulary-denylist: "catalog block|BlockManifest|decision product|Datum Services Standard"
       vocabulary-scan-paths: "tests/fixtures/vocabulary/"
       vocabulary-allow-files: "rename-history.md"
+
+  # python-ci run against a fixture project that carries the vendored configs
+  # exactly as a scaffolded repo would. If a change to configs/ would break
+  # every Python repo in the org, it breaks here first.
+  python-ci:
+    uses: ./.github/workflows/python-ci.yml
+    with:
+      working-directory: tests/fixtures/python-ok

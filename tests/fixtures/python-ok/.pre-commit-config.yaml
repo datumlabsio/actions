@@ -1,0 +1,11 @@
+# DES §3: a pre-commit config in the repo, and a CI stage running the same
+# hooks. This is the fixture's copy, so python-ci's pre-commit stage is
+# exercised in self-test rather than assumed.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
