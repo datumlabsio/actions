@@ -1,0 +1,46 @@
+name: self-test
+
+# Every workflow here runs against real content before it ships, because every
+# repo in the org will be downstream of this one. A bad change merged untested
+# breaks the whole fleet's CI at once, not one repo's.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # The workflows must at least be parseable. A malformed workflow file fails
+  # at dispatch time with a message that points nowhere useful.
+  yaml-valid:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Workflows parse
+        run: |
+          python3 - <<'PY'
+          import glob, sys, yaml
+          bad = 0
+          for f in sorted(glob.glob('.github/workflows/*.yml')):
+              try:
+                  yaml.safe_load(open(f))
+                  print(f"  OK  {f}")
+              except yaml.YAMLError as e:
+                  print(f"  FAIL {f}: {e}")
+                  bad = 1
+          sys.exit(bad)
+          PY
+
+  # docs-ci run against this repo, with every optional check switched on, so a
+  # change to any of them is exercised here first.
+  docs-ci:
+    uses: ./.github/workflows/docs-ci.yml
+    with:
+      placeholder-paths: "docs/"
+      vocabulary-denylist: "catalog block|BlockManifest|decision product|Datum Services Standard"
+      vocabulary-scan-paths: "docs/ README.md CLAUDE.md"
