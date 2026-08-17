@@ -58,3 +58,12 @@ jobs:
     uses: ./.github/workflows/python-ci.yml
     with:
       working-directory: tests/fixtures/python-ok
+
+  # dbt-ci run against a fixture project on duckdb, so `dbt build` and the
+  # contract check are genuinely exercised with no warehouse and no
+  # credentials. A change to the shared sqlfluff config or the coverage script
+  # breaks here before it reaches an install.
+  dbt-ci:
+    uses: ./.github/workflows/dbt-ci.yml
+    with:
+      working-directory: tests/fixtures/dbt-ok

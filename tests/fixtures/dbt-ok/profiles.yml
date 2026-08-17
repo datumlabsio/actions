@@ -1,0 +1,10 @@
+# A duckdb target so CI can run `dbt build` with no warehouse and no
+# credentials. A real install points its ci target at a scratch schema in the
+# install's warehouse instead.
+datum_fixture:
+  target: ci
+  outputs:
+    ci:
+      type: duckdb
+      path: "target/fixture.duckdb"
+      threads: 1

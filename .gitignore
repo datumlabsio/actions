@@ -5,3 +5,9 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+
+# dbt
+target/
+dbt_packages/
+logs/
+*.duckdb

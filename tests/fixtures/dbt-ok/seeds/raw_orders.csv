@@ -1,0 +1,5 @@
+order_id,customer_id,status,amount
+1,10,completed,25.00
+2,10,completed,17.50
+3,11,returned,42.00
+4,12,completed,8.25

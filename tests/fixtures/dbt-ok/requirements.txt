@@ -1,0 +1,4 @@
+# The warehouse adapter is the repo's business, not the shared config's.
+# A real install pins dbt-bigquery or dbt-clickhouse here; the fixture uses
+# duckdb so CI can run `dbt build` with no warehouse and no credentials.
+dbt-duckdb==1.11.0

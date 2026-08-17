@@ -1,0 +1,25 @@
+version: 2
+
+models:
+  - name: fct_orders
+    description: >-
+      Completed order value per customer. A mart, so it carries an enforced
+      contract — anything downstream reads this shape or nothing.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: customer_id
+        description: The customer this row summarises.
+        data_type: integer
+        data_tests:
+          - unique
+          - not_null
+      - name: order_count
+        description: Number of completed orders for this customer.
+        data_type: bigint
+        data_tests:
+          - not_null
+      - name: total_amount
+        description: Sum of completed order value for this customer.
+        data_type: double
