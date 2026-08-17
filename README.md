@@ -28,8 +28,15 @@ That is the whole file. If a repo's CI has steps of its own, something has gone 
 | Workflow | For | Docs |
 |---|---|---|
 | `docs-ci.yml` | archetype `docs` — standards and documentation repos | [docs/docs-ci.md](docs/docs-ci.md) |
+| `python-ci.yml` | any Python surface — ruff, mypy, pytest, pre-commit, under uv | [docs/python-ci.md](docs/python-ci.md) |
 
-Still to come, in this order: `python-ci`, `security-baseline`, `container-ci`, `release`, coverage checks, `dbt-ci`, `ai-review`, `conformance-audit`.
+Still to come, in this order: `security-baseline`, `container-ci`, `release`, coverage checks, `dbt-ci`, `ai-review`, `conformance-audit`.
+
+## Configs are vendored, not fetched
+
+Tool configs live in [`configs/`](configs/README.md) as the canonical copy, and every repo carries its own vendored copy with a version stamp. CI reads the repo's copy, not this one.
+
+That is so a developer's local `ruff check` reads the same file the runner reads. It also means no repo needs a token to read this private repo at runtime. The cost is that configs can drift, which the version stamp, the conformance audit, and Renovate between them catch. A vendored config is bumped, never hand-edited — the same rule RFC-0010 set for `.claude/`.
 
 ## Versioning
 

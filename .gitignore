@@ -1,0 +1,7 @@
+# Tool caches and virtualenvs, mostly from running the fixture locally.
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/

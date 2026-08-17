@@ -1,0 +1,139 @@
+name: python-ci
+
+# Reusable CI for Python. Callers pin a version tag:
+#
+#   jobs:
+#     ci:
+#       uses: datumlabsio/actions/.github/workflows/python-ci.yml@v1
+#
+# Configs are NOT fetched from here at runtime. Every repo carries its own
+# vendored copy, put there by its scaffold and bumped like a dependency, so a
+# developer's local run reads the same file CI reads. The canonical copies live
+# in configs/ — see configs/README.md. Tool versions come from the repo's
+# tool-versions.txt for the same reason.
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version for uv to install."
+        type: string
+        default: "3.12"
+
+      working-directory:
+        description: "Directory holding the project, if it is not the repo root."
+        type: string
+        default: "."
+
+      config-dir:
+        description: >-
+          Where the repo's vendored configs live, relative to
+          working-directory.
+        type: string
+        default: "."
+
+      lint:
+        description: "Run ruff check and ruff format --check."
+        type: boolean
+        default: true
+
+      typecheck:
+        description: "Run mypy."
+        type: boolean
+        default: true
+
+      test:
+        description: "Run pytest."
+        type: boolean
+        default: true
+
+      pre-commit:
+        description: >-
+          Run the repo's pre-commit hooks. DES §3 requires a pre-commit config
+          and a CI stage running the same hooks, so this defaults on and fails
+          when the config is missing.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      CONFIG_DIR: ${{ inputs.config-dir }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install "${{ inputs.python-version }}"
+
+      # Fail here, with an actionable message, rather than three steps later
+      # with ruff complaining about a file it cannot find.
+      - name: Vendored configs present and stamped
+        run: |
+          missing=0
+          for f in ruff.toml mypy.ini tool-versions.txt; do
+            p="$CONFIG_DIR/$f"
+            if [ ! -f "$p" ]; then
+              echo "::error::$p not found. It is vendored in by the scaffold — copy it from datumlabsio/actions/configs/."
+              missing=1
+              continue
+            fi
+            if ! head -3 "$p" | grep -q '^# datum-config:'; then
+              echo "::error::$p has no '# datum-config:' version stamp. A vendored config is bumped, never hand-written."
+              missing=1
+              continue
+            fi
+            echo "  $(head -1 "$p" | sed 's/^# //')  ($p)"
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
+      - name: Sync dependencies
+        run: |
+          if [ -f uv.lock ]; then
+            uv sync --frozen --all-extras --dev
+          elif [ -f pyproject.toml ]; then
+            uv sync --all-extras --dev
+          else
+            echo "::notice::No pyproject.toml; running tools without a project environment."
+          fi
+
+      - name: Lint
+        if: inputs.lint
+        run: |
+          uv run --with-requirements "$CONFIG_DIR/tool-versions.txt" -- \
+            ruff check --config "$CONFIG_DIR/ruff.toml" .
+          uv run --with-requirements "$CONFIG_DIR/tool-versions.txt" -- \
+            ruff format --check --config "$CONFIG_DIR/ruff.toml" .
+
+      - name: Type check
+        if: inputs.typecheck
+        run: |
+          uv run --with-requirements "$CONFIG_DIR/tool-versions.txt" -- \
+            mypy --config-file "$CONFIG_DIR/mypy.ini" .
+
+      - name: Test
+        if: inputs.test
+        run: |
+          uv run --with-requirements "$CONFIG_DIR/tool-versions.txt" -- pytest -q
+
+      - name: Pre-commit hooks
+        if: inputs.pre-commit
+        run: |
+          if [ ! -f .pre-commit-config.yaml ]; then
+            echo "::error::No .pre-commit-config.yaml. DES §3 requires one, and a CI stage that runs the same hooks."
+            exit 1
+          fi
+          uv run --with-requirements "$CONFIG_DIR/tool-versions.txt" -- \
+            pre-commit run --all-files --show-diff-on-failure
