@@ -42,5 +42,11 @@ jobs:
     uses: ./.github/workflows/docs-ci.yml
     with:
       placeholder-paths: "docs/"
+      # Scanned against fixtures, not against this repo's own docs. Those docs
+      # quote the denylist to explain the input, and the vocabulary check
+      # deliberately reads code as well as prose — a retired identifier in an
+      # example is a real occurrence. The fixtures exercise both the denylist
+      # and the allowlist without that collision.
       vocabulary-denylist: "catalog block|BlockManifest|decision product|Datum Services Standard"
-      vocabulary-scan-paths: "docs/ README.md CLAUDE.md"
+      vocabulary-scan-paths: "tests/fixtures/vocabulary/"
+      vocabulary-allow-files: "rename-history.md"

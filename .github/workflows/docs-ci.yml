@@ -111,12 +111,51 @@ jobs:
 
       - name: No placeholder rot
         if: inputs.placeholder-paths != ''
+        env:
+          PATHS: ${{ inputs.placeholder-paths }}
         run: |
-          if grep -rnE '\bTODO\b|\bTBD\b' ${{ inputs.placeholder-paths }} ; then
-            echo "::error::TODO or TBD in a path that must be finished prose."
-            exit 1
-          fi
-          echo "No placeholder rot in: ${{ inputs.placeholder-paths }}"
+          python3 - <<'PY'
+          import os, re, sys
+
+          hits = []
+          for base in os.environ['PATHS'].split():
+              if os.path.isfile(base):
+                  targets = [base]
+              elif os.path.isdir(base):
+                  targets = []
+                  for root, dirs, files in os.walk(base):
+                      dirs[:] = [d for d in dirs if d != '.git']
+                      targets += [os.path.join(root, f)
+                                  for f in files if f.endswith('.md')]
+              else:
+                  print(f"::error::placeholder-paths names '{base}', which does not exist.")
+                  sys.exit(1)
+
+              for p in sorted(targets):
+                  with open(p, encoding='utf-8', errors='replace') as fh:
+                      lines = fh.read().splitlines()
+                  # Scanned line by line so reported line numbers are real.
+                  # Code is skipped: documenting the word TODO is not the same
+                  # as leaving one. An HTML comment is NOT skipped — a note to
+                  # self in a comment is exactly the thing this check is for.
+                  in_fence = False
+                  for n, line in enumerate(lines, 1):
+                      if line.lstrip().startswith('```'):
+                          in_fence = not in_fence
+                          continue
+                      if in_fence:
+                          continue
+                      prose = re.sub(r'`[^`]*`', '', line)
+                      if re.search(r'\bTODO\b|\bTBD\b', prose):
+                          hits.append(f"{p}:{n}: {line.strip()}")
+
+          if hits:
+              print("::error::TODO or TBD in a path that must be finished prose:")
+              for h in hits:
+                  print(f"  {h}")
+              sys.exit(1)
+          print(f"No placeholder rot in: {os.environ['PATHS']}")
+          PY
 
       - name: No retired vocabulary
         if: inputs.vocabulary-denylist != ''

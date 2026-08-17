@@ -41,7 +41,13 @@ That gives you the two checks that are on by default. Everything else you switch
 
 **Placeholder rot.** `TODO` and `TBD` in finished prose mean the document is lying about being finished. Point this at the paths that are meant to be complete, not at working notes.
 
-**Retired vocabulary.** When a word is replaced, the old one has to stop appearing or both live on forever. `vocabulary-allow-files` is for the places where the old word is legitimately still needed: history notes, terminology bridges, rejected proposals.
+Fenced blocks and inline code are skipped — documenting the word is not the same as leaving one. HTML comments are **not** skipped, because a note to self in a comment is exactly what this check is for. A path that does not exist is an error, not a silent pass.
+
+**Retired vocabulary.** When a word is replaced, the old one has to stop appearing or both live on forever.
+
+Unlike the placeholder check, this one reads code as well as prose. That is deliberate: a retired identifier in a YAML example is a real occurrence, not an illustration. The consequence is that a page explaining the denylist will match its own examples — put that page in `vocabulary-allow-files`, or scan a narrower path.
+
+`vocabulary-allow-files` is for the places where the old word is legitimately needed: history notes, terminology bridges, rejected proposals.
 
 **Proposal status matches what shipped.** Only runs on pull requests, and only when both `rfc-dir` and `spec-dir` are set.
 
