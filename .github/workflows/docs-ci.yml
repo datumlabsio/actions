@@ -1,0 +1,229 @@
+name: docs-ci
+
+# Reusable CI for the `docs` archetype (DES §8). Callers pin a version tag:
+#
+#   jobs:
+#     ci:
+#       uses: datumlabsio/actions/.github/workflows/docs-ci.yml@v1
+#       with:
+#         placeholder-paths: "standards/ vision/"
+#
+# Every check is off by default except conflict markers and the link check.
+# A repo turns on what applies to it. See docs/docs-ci.md.
+
+on:
+  workflow_call:
+    inputs:
+      link-check:
+        description: "Check that every relative markdown link resolves."
+        type: boolean
+        default: true
+
+      placeholder-paths:
+        description: >-
+          Space-separated paths where TODO and TBD must not appear.
+          Empty skips the check.
+        type: string
+        default: ""
+
+      vocabulary-denylist:
+        description: >-
+          Pipe-separated terms that must not appear (retired vocabulary).
+          Empty skips the check.
+        type: string
+        default: ""
+
+      vocabulary-scan-paths:
+        description: "Space-separated paths to scan for the denylist."
+        type: string
+        default: "."
+
+      vocabulary-allow-files:
+        description: >-
+          Pipe-separated path fragments exempt from the denylist — history
+          notes, terminology bridges, rejected proposals.
+        type: string
+        default: ""
+
+      rfc-dir:
+        description: >-
+          Directory holding numbered proposals. Set together with spec-dir to
+          check that a proposal is not left in Draft while its changes ship.
+        type: string
+        default: ""
+
+      spec-dir:
+        description: "Directory holding the specs that proposals change."
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: No conflict markers
+        run: |
+          if grep -rn '^<<<<<<< \|^>>>>>>> ' --include='*.md' . ; then
+            echo "::error::Conflict markers left in a merged file."
+            exit 1
+          fi
+          echo "No conflict markers."
+
+      - name: Relative links resolve
+        if: inputs.link-check
+        run: |
+          python3 - <<'PY'
+          import re, os, sys
+          bad = []
+          for root, dirs, files in os.walk('.'):
+              dirs[:] = [d for d in dirs if d != '.git']
+              for f in files:
+                  if not f.endswith('.md'):
+                      continue
+                  p = os.path.join(root, f)
+                  with open(p, encoding='utf-8', errors='replace') as fh:
+                      text = fh.read()
+                  # Code is not a link. A docs repo that documents markdown
+                  # syntax would otherwise fail on its own examples.
+                  text = re.sub(r'```.*?```', '', text, flags=re.S)
+                  text = re.sub(r'`[^`\n]*`', '', text)
+                  for m in re.finditer(r'\]\(([^)#\s]+)(?:#[^)]*)?\)', text):
+                      t = m.group(1)
+                      if t.startswith(('http', 'mailto')):
+                          continue
+                      if not os.path.exists(os.path.normpath(os.path.join(root, t))):
+                          bad.append(f"{p} -> {t}")
+          if bad:
+              print("::error::Broken relative links:")
+              for b in bad:
+                  print(f"  {b}")
+              sys.exit(1)
+          print("All relative links resolve.")
+          PY
+
+      - name: No placeholder rot
+        if: inputs.placeholder-paths != ''
+        env:
+          PATHS: ${{ inputs.placeholder-paths }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+
+          hits = []
+          for base in os.environ['PATHS'].split():
+              if os.path.isfile(base):
+                  targets = [base]
+              elif os.path.isdir(base):
+                  targets = []
+                  for root, dirs, files in os.walk(base):
+                      dirs[:] = [d for d in dirs if d != '.git']
+                      targets += [os.path.join(root, f)
+                                  for f in files if f.endswith('.md')]
+              else:
+                  print(f"::error::placeholder-paths names '{base}', which does not exist.")
+                  sys.exit(1)
+
+              for p in sorted(targets):
+                  with open(p, encoding='utf-8', errors='replace') as fh:
+                      lines = fh.read().splitlines()
+                  # Scanned line by line so reported line numbers are real.
+                  # Code is skipped: documenting the word TODO is not the same
+                  # as leaving one. An HTML comment is NOT skipped — a note to
+                  # self in a comment is exactly the thing this check is for.
+                  in_fence = False
+                  for n, line in enumerate(lines, 1):
+                      if line.lstrip().startswith('```'):
+                          in_fence = not in_fence
+                          continue
+                      if in_fence:
+                          continue
+                      prose = re.sub(r'`[^`]*`', '', line)
+                      if re.search(r'\bTODO\b|\bTBD\b', prose):
+                          hits.append(f"{p}:{n}: {line.strip()}")
+
+          if hits:
+              print("::error::TODO or TBD in a path that must be finished prose:")
+              for h in hits:
+                  print(f"  {h}")
+              sys.exit(1)
+          print(f"No placeholder rot in: {os.environ['PATHS']}")
+          PY
+
+      - name: No retired vocabulary
+        if: inputs.vocabulary-denylist != ''
+        env:
+          DENYLIST: ${{ inputs.vocabulary-denylist }}
+          ALLOW: ${{ inputs.vocabulary-allow-files }}
+        run: |
+          hits=$(grep -rnE "$DENYLIST" --include='*.md' ${{ inputs.vocabulary-scan-paths }} || true)
+          if [ -n "$ALLOW" ]; then
+            hits=$(printf '%s\n' "$hits" | grep -vE "$ALLOW" || true)
+          fi
+          if [ -n "$hits" ]; then
+            echo "::error::Retired vocabulary outside the allowlist:"
+            printf '%s\n' "$hits"
+            exit 1
+          fi
+          echo "No retired vocabulary."
+
+      # A proposal and the spec change it causes land on the same pull request.
+      # The proposal's status flips on that pull request, never afterwards — so
+      # a pull request that ships spec text while leaving its proposal in Draft
+      # leaves the repository saying two different things.
+      - name: Proposal status matches what shipped
+        if: >-
+          github.event_name == 'pull_request' &&
+          inputs.rfc-dir != '' && inputs.spec-dir != ''
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          RFC_DIR: ${{ inputs.rfc-dir }}
+          SPEC_DIR: ${{ inputs.spec-dir }}
+        run: |
+          if ! git cat-file -e "$BASE" 2>/dev/null; then
+            echo "::notice::Base commit not available; skipping."
+            exit 0
+          fi
+
+          changed=$(git diff --name-only "$BASE" HEAD)
+          spec_changed=$(printf '%s\n' "$changed" | grep "^$SPEC_DIR" || true)
+          rfcs_changed=$(printf '%s\n' "$changed" | grep "^$RFC_DIR.*\.md$" || true)
+
+          if [ -z "$spec_changed" ] || [ -z "$rfcs_changed" ]; then
+            echo "Not a proposal-plus-spec pull request; nothing to check."
+            exit 0
+          fi
+
+          # Read line by line rather than relying on word splitting: a path with
+          # a space in it would otherwise be silently skipped, and a silently
+          # skipped check is worse than no check.
+          fail=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$(basename "$f")" in TEMPLATE.md) continue ;; esac
+            [ -f "$f" ] || continue
+            line=$(grep -m1 '^- \*\*Status:\*\*' "$f" || true)
+            if [ -z "$line" ]; then
+              echo "::error file=$f::No '- **Status:**' line found. Every proposal declares a status."
+              fail=1
+              continue
+            fi
+            case "$line" in
+              *Draft*)
+                echo "::error file=$f::This pull request changes $SPEC_DIR but leaves $f at Status: Draft. Flip it on this pull request, not afterwards."
+                fail=1
+                ;;
+            esac
+          done <<< "$rfcs_changed"
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Every changed proposal has a settled status."
