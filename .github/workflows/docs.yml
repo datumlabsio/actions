@@ -9,7 +9,7 @@ name: docs
 #     contents: read
 #   jobs:
 #     ci:
-#       uses: datumlabsio/actions/.github/workflows/docs.yml@v1.0.0
+#       uses: datumlabsio/actions/.github/workflows/docs.yml@v0.1.0
 #       with:
 #         placeholder-paths: "standards/ vision/"
 #

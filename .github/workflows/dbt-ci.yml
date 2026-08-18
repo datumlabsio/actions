@@ -4,7 +4,7 @@ name: dbt-ci
 #
 #   jobs:
 #     ci:
-#       uses: datumlabsio/actions/.github/workflows/dbt-ci.yml@v1.0.0
+#       uses: datumlabsio/actions/.github/workflows/dbt-ci.yml@v0.1.0
 #       secrets: inherit
 #
 # Enforces blocks/dbt.md §6: dbt build green, YAML coverage, SQL linting, and

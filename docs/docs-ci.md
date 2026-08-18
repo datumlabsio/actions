@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   ci:
-    uses: datumlabsio/actions/.github/workflows/docs-ci.yml@v1.0.0
+    uses: datumlabsio/actions/.github/workflows/docs-ci.yml@v0.1.0
 ```
 
 That gives you the two checks that are on by default. Everything else you switch on for your repo.
@@ -62,7 +62,7 @@ The check reads the first line matching `- **Status:**` in each changed proposal
 ```yaml
 jobs:
   ci:
-    uses: datumlabsio/actions/.github/workflows/docs-ci.yml@v1.0.0
+    uses: datumlabsio/actions/.github/workflows/docs-ci.yml@v0.1.0
     with:
       placeholder-paths: "standards/ vision/"
       vocabulary-denylist: "catalog block|BlockManifest|decision product|Datum Services Standard"
