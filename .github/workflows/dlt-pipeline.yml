@@ -1,0 +1,59 @@
+name: dlt-pipeline
+
+# The caller surface for the `dlt-pipeline` archetype (DES §8):
+#
+#   jobs:
+#     ci:
+#       uses: datumlabsio/actions/.github/workflows/dlt-pipeline.yml@v1.0.0
+#
+# A dlt pipeline is Python that runs inside the user-code image, so it gets the
+# Python gates and no container build of its own — the image belongs to the
+# `dagster-user-code` repo that carries it (§8).
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        type: string
+        default: "3.12"
+      working-directory:
+        type: string
+        default: "."
+      config-dir:
+        type: string
+        default: "."
+      lint:
+        type: boolean
+        default: true
+      typecheck:
+        type: boolean
+        default: true
+      test:
+        type: boolean
+        default: true
+      pre-commit:
+        type: boolean
+        default: true
+      commit-lint:
+        description: "Validate the pull request title (DES §3)."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    if: inputs.commit-lint && github.event_name == 'pull_request'
+    uses: ./.github/workflows/commit-lint.yml
+
+  python:
+    uses: ./.github/workflows/python-ci.yml
+    with:
+      python-version: ${{ inputs.python-version }}
+      working-directory: ${{ inputs.working-directory }}
+      config-dir: ${{ inputs.config-dir }}
+      lint: ${{ inputs.lint }}
+      typecheck: ${{ inputs.typecheck }}
+      test: ${{ inputs.test }}
+      pre-commit: ${{ inputs.pre-commit }}
