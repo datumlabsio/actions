@@ -1,0 +1,62 @@
+name: commit-lint
+
+# Validates the pull request title against Conventional Commits. Callers pin a
+# version tag:
+#
+#   jobs:
+#     title:
+#       uses: datumlabsio/actions/.github/workflows/commit-lint.yml@v1.0.0
+#
+# The title is what matters because a squash merge uses it as the commit
+# message — so an unconventional title becomes an unversionable commit on main,
+# and the release workflow cannot derive a version from it (DES §3, §10).
+
+on:
+  workflow_call:
+    inputs:
+      allow-types:
+        description: >-
+          Pipe-separated Conventional Commit types accepted in a title.
+        type: string
+        default: "feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Title is a Conventional Commit
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          TYPES: ${{ inputs.allow-types }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+
+          title = os.environ["TITLE"]
+          types = os.environ["TYPES"]
+
+          # type(optional scope)optional !: description
+          pattern = rf"^({types})(\([a-z0-9._/-]+\))?!?: .+"
+
+          if re.match(pattern, title):
+              print(f"OK: {title}")
+              sys.exit(0)
+
+          print(f"::error::Pull request title is not a Conventional Commit: {title!r}")
+          print("")
+          print("A squash merge uses this title as the commit message on main, so an")
+          print("unconventional title produces a commit the release workflow cannot")
+          print("derive a version from.")
+          print("")
+          print(f"  Expected:  type: description        (types: {types.replace('|', ', ')})")
+          print("  Optional:  type(scope): description")
+          print("  Breaking:  type!: description   — or a BREAKING CHANGE: footer")
+          print("")
+          print("  Examples:  feat(python-ci): add coverage gate")
+          print("             fix: stop the link check reading code spans")
+          sys.exit(1)
+          PY
