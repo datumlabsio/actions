@@ -1,0 +1,30 @@
+# datum-config: yamllint v1
+# Vendored from datumlabsio/actions/configs/.yamllint. Bump it, do not edit it.
+#
+# DES §5 names yamllint as the YAML convention. Rules only — no path-shaped
+# keys, because this file sits at a different depth in every repo.
+#
+# Kubernetes manifests drive the choices here: long image digests and
+# annotation values cannot be wrapped, and `on:`/`yes` as bare words are
+# genuinely ambiguous in YAML 1.1 so they stay errors.
+
+extends: default
+
+rules:
+  line-length:
+    max: 140
+    level: warning
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  document-start: disable
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: true
+  braces:
+    max-spaces-inside: 1
+  brackets:
+    max-spaces-inside: 1
+  indentation:
+    spaces: 2
+    indent-sequences: consistent

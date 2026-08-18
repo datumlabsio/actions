@@ -84,3 +84,10 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       dry-run: true
+
+  # gitops-ci against a real Flux tree: kustomize renders offline and kubeconform
+  # validates the result, so every gate runs with no cluster and no credentials.
+  gitops-ci:
+    uses: ./.github/workflows/gitops-ci.yml
+    with:
+      root: tests/fixtures/gitops-ok

@@ -1,0 +1,5 @@
+apiVersion: v2
+name: datum-library
+description: Shared template helpers for Datum platform charts.
+type: library
+version: 0.1.0

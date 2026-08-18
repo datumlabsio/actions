@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: warehouse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: warehouse
+  template:
+    metadata:
+      labels:
+        app: warehouse
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: warehouse
+          # Pinned by digest: the cluster's state cannot drift with a re-pull.
+          image: clickhouse/clickhouse-server:24.8.4.13@sha256:0e5b1b0f0b8c9c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9
+          ports:
+            - containerPort: 8123
