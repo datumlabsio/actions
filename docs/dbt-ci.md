@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   ci:
-    uses: datumlabsio/actions/.github/workflows/dbt-ci.yml@v1
+    uses: datumlabsio/actions/.github/workflows/dbt-ci.yml@v1.0.0
     secrets: inherit
 ```
 

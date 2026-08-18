@@ -82,3 +82,14 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       dry-run: true
+
+  # release in dry-run: the version derivation runs against this repo's real
+  # history on every pull request, so a change to it cannot ship untested.
+  # Nothing is tagged and nothing is published, so self-test's read-only token
+  # is enough — and this job is what would catch a permissions regression in
+  # release.yml, because asking for more than the caller grants fails at
+  # startup rather than in a step.
+  release-dry-run:
+    uses: ./.github/workflows/release.yml
+    with:
+      dry-run: true
