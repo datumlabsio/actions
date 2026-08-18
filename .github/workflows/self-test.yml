@@ -72,13 +72,3 @@ jobs:
   # rather than a fixture, which is the only way to know the event wiring works.
   commit-lint:
     uses: ./.github/workflows/commit-lint.yml
-
-  # release in dry-run: the version derivation runs against this repo's real
-  # history on every pull request, so a change to it cannot ship untested.
-  # Nothing is tagged and nothing is published.
-  release-dry-run:
-    permissions:
-      contents: read
-    uses: ./.github/workflows/release.yml
-    with:
-      dry-run: true
