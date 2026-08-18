@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   ci:
-    uses: datumlabsio/actions/.github/workflows/docs-ci.yml@v1
+    uses: datumlabsio/actions/.github/workflows/docs-ci.yml@v1.0.0
 ```
 
 That is the whole file. If a repo's CI has steps of its own, something has gone wrong — either the gate belongs here, or the repo is doing something that needs an RFC.
@@ -43,9 +43,11 @@ That is so a developer's local `ruff check` reads the same file the runner reads
 
 ## Versioning
 
-Callers pin the **moving major tag** — `@v1`. Patch and minor releases move that tag, so a gate fixed here reaches every repo without 200 pull requests. A breaking change to any input goes to `v2` and callers migrate deliberately.
+Callers pin an **exact version** — `@v1.4.2`. Never a moving tag.
 
-A repo that needs frozen CI may pin an exact tag (`@v1.4.2`) instead. That is a deliberate choice with a cost: it stops receiving fixes.
+The mechanism that carries a gate fix across the fleet is Renovate: when a release is cut here, it opens a bump pull request in every repo pinned to the old one. A moving tag is the one thing Renovate cannot bump, so a repo pinned to `@v1` would silently stop being tracked by the thing meant to keep it current.
+
+Exact pins also mean a repo's CI changes only when a reviewed pull request lands in that repo. Nothing about its build changes because something moved elsewhere.
 
 Breaking, for the purposes of that rule, means: removing an input, renaming one, changing a default in a way that makes a previously-passing repo fail, or adding a check that is on by default.
 
@@ -53,19 +55,18 @@ Breaking, for the purposes of that rule, means: removing an input, renaming one,
 
 - **Third-party actions are pinned by commit SHA**, never by tag. A tag can be moved by someone else; a SHA cannot. DES §4.
 - **Every workflow declares an explicit `permissions:` block**, least-privilege. Default to `contents: read` and add only what the workflow actually needs.
+- **One exception, and it is a hard constraint rather than a preference:** a reusable workflow needing more than `contents: read` declares *no* `permissions:` block and the caller grants it. A called workflow cannot request more than its caller has, and asking for more fails at startup — no job runs and there is no log. `release.yml` is the only such workflow today.
 - **No long-lived cloud credentials.** Cloud access uses OIDC federation. DES §4.
 - **Every workflow is exercised by `self-test.yml` before it ships.** Every repo in the org is downstream of this one, so an untested change breaks the fleet's CI at once rather than one repo's.
 - **New checks arrive switched off.** Add the input with a default that preserves current behaviour, let repos opt in, and only then discuss making it the default.
 
 ## Releasing
 
-1. Merge to `main`.
-2. Tag the release: `git tag v1.1.0 && git push origin v1.1.0`.
-3. Move the major tag: `git tag -f v1 && git push -f origin v1`.
+Merge to `main` and let `release.yml` cut it — the version comes from the Conventional Commits since the last tag, and CI creates the tag. Nothing is tagged by hand.
 
-Step 3 is the one that reaches the fleet, and it is the one to be careful with. Once there is more than a handful of repos downstream, point a canary repo at the new exact tag first and let a real pull request run through it before moving `v1`.
+Renovate then opens the bump in each downstream repo. Once there are more than a handful, let a canary repo take the bump first and run a real pull request through it before the rest merge theirs.
 
-Published tags are never rewritten except for the moving major. A version that repos have run must stay what it was.
+**No published tag is ever rewritten or moved.** `release.yml` refuses to create a tag that already exists, locally or on the remote, and never passes `--force`. A version repos have run must stay what it was — rollback depends on it (DES §10).
 
 ## Access
 

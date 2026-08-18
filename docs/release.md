@@ -64,7 +64,16 @@ This is checked rather than trusted because the failure is silent: a moved tag m
 
 ## Permissions
 
-`contents: write` — the only workflow in this repo that needs write, and it needs it to create a tag and a release. Everything else is `contents: read`.
+**The caller grants `contents: write`**; this workflow declares no `permissions:` block of its own.
+
+That is a constraint, not a choice. A called workflow cannot request more than its caller has, and asking for more fails the run at startup — before any job, with nothing in the log to explain it. So the requirement lives with the caller:
+
+```yaml
+permissions:
+  contents: write
+```
+
+A caller that grants only `contents: read` can still call this with `dry-run: true`, which is exactly what `self-test` does.
 
 ## The pull-request half
 

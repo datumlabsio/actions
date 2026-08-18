@@ -39,9 +39,20 @@ on:
         description: "'true' when a tag was created."
         value: ${{ jobs.release.outputs.released }}
 
-# The one workflow that needs write. Everything else in this repo is read-only.
-permissions:
-  contents: write
+# Deliberately no `permissions:` block here, which is the one exception to this
+# repo's declare-it-explicitly rule.
+#
+# A called workflow cannot request more than its caller grants — asking for
+# more is a startup failure, before any job runs. This workflow needs
+# `contents: write` to create a tag, so declaring that here would break every
+# caller that grants less, including self-test's dry run.
+#
+# The caller grants it instead:
+#
+#   permissions:
+#     contents: write
+#
+# A caller that grants only read can still call this with `dry-run: true`.
 
 jobs:
   release:

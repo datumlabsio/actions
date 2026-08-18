@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   ci:
-    uses: datumlabsio/actions/.github/workflows/python-ci.yml@v1
+    uses: datumlabsio/actions/.github/workflows/python-ci.yml@v1.0.0
 ```
 
 ## Inputs
