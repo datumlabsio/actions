@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   release:
-    uses: datumlabsio/actions/.github/workflows/release.yml@v1.0.0
+    uses: datumlabsio/actions/.github/workflows/release.yml@v0.1.0
 ```
 
 Pair it with `commit-lint.yml` on pull requests, so a merge cannot produce a commit this workflow has no version for.
@@ -82,7 +82,7 @@ A caller that grants only `contents: read` can still call this with `dry-run: tr
 ```yaml
 jobs:
   title:
-    uses: datumlabsio/actions/.github/workflows/commit-lint.yml@v1.0.0
+    uses: datumlabsio/actions/.github/workflows/commit-lint.yml@v0.1.0
 ```
 
 Its `allow-types` input takes a pipe-separated list, if a repo needs a type the default set does not have.

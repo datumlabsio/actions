@@ -5,7 +5,7 @@ name: commit-lint
 #
 #   jobs:
 #     title:
-#       uses: datumlabsio/actions/.github/workflows/commit-lint.yml@v1.0.0
+#       uses: datumlabsio/actions/.github/workflows/commit-lint.yml@v0.1.0
 #
 # The title is what matters because a squash merge uses it as the commit
 # message — so an unconventional title becomes an unversionable commit on main,

@@ -4,7 +4,7 @@ name: release
 #
 #   jobs:
 #     release:
-#       uses: datumlabsio/actions/.github/workflows/release.yml@v1.0.0
+#       uses: datumlabsio/actions/.github/workflows/release.yml@v0.1.0
 #
 # DES §3 requires SemVer cut by CI from those commits. DES §10 requires that a
 # published version is never changed and a tag is never moved, because rollback

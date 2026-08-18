@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   ci:
-    uses: datumlabsio/actions/.github/workflows/docs.yml@v1.0.0
+    uses: datumlabsio/actions/.github/workflows/docs.yml@v0.1.0
 ```
 
 That is the whole file. The archetype workflow decides which language workflows run underneath.
@@ -67,7 +67,7 @@ permissions:
 
 jobs:
   release:
-    uses: datumlabsio/actions/.github/workflows/release.yml@v1.0.0
+    uses: datumlabsio/actions/.github/workflows/release.yml@v0.1.0
 ```
 
 See [`release.md`](release.md).

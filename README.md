@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   ci:
-    uses: datumlabsio/actions/.github/workflows/docs-ci.yml@v1.0.0
+    uses: datumlabsio/actions/.github/workflows/docs-ci.yml@v0.1.0
 ```
 
 That is the whole file. If a repo's CI has steps of its own, something has gone wrong — either the gate belongs here, or the repo is doing something that needs an RFC.

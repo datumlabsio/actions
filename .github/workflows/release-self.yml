@@ -1,0 +1,27 @@
+name: release-self
+
+# This repo releases itself with its own release workflow.
+#
+# Without this caller, release.yml could never cut a tag here: it is a
+# workflow_call workflow and nothing invoked it except self-test's dry run. The
+# repo that supplies release automation to the whole org could not release
+# itself, which is the sort of gap that stays hidden until someone needs a tag.
+
+on:
+  push:
+    branches: [main]
+
+# release.yml declares no permissions of its own by design — a called workflow
+# cannot ask for more than its caller grants. Creating a tag and a release
+# needs write, so the caller grants it here and nowhere else.
+permissions:
+  contents: write
+
+# Two merges landing close together must not race to cut the same version.
+concurrency:
+  group: release-self
+  cancel-in-progress: false
+
+jobs:
+  release:
+    uses: ./.github/workflows/release.yml

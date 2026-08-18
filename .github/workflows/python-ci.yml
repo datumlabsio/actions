@@ -4,7 +4,7 @@ name: python-ci
 #
 #   jobs:
 #     ci:
-#       uses: datumlabsio/actions/.github/workflows/python-ci.yml@v1.0.0
+#       uses: datumlabsio/actions/.github/workflows/python-ci.yml@v0.1.0
 #
 # Configs are NOT fetched from here at runtime. Every repo carries its own
 # vendored copy, put there by its scaffold and bumped like a dependency, so a
