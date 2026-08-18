@@ -15,8 +15,12 @@ Reusable workflows must live in `.github/workflows/`. GitHub does not find them 
 # job key (PyYAML keeps the last one silently) and knows nothing about Actions
 # semantics. Both of those have shipped here and both fail at startup with no
 # readable log. Same version CI pins.
-brew install actionlint 2>/dev/null || true   # or download the pinned release
-actionlint
+#
+# shellcheck must be on PATH. actionlint runs it over every `run:` block, and
+# SILENTLY SKIPS that half when it is missing — so a locally-clean run can still
+# fail in CI, where the runner has it. That has happened here once already.
+actionlint            # after: brew install actionlint shellcheck
+shellcheck --version  # if this fails, your actionlint run is only half a check
 
 # Third-party actions pinned by SHA; our own repo and local paths pinned by tag (DES §4).
 grep -rnE "^[[:space:]]*uses:" .github/workflows/ | grep -vE "uses:[[:space:]]*(\./|datumlabsio/)" | grep -v "@[0-9a-f]\{40\}" || echo "ALL THIRD-PARTY ACTIONS SHA-PINNED"

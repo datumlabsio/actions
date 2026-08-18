@@ -32,6 +32,7 @@ That is the whole file. If a repo's CI has steps of its own, something has gone 
 | `dbt-ci.yml` | archetype `dbt-project` — sqlfluff, YAML coverage, dbt build | [docs/dbt-ci.md](docs/dbt-ci.md) |
 | `release.yml` | cutting a SemVer release from Conventional Commits | [docs/release.md](docs/release.md) |
 | `commit-lint.yml` | validating a pull request title, so the merge stays versionable | [docs/release.md](docs/release.md) |
+| `gitops-ci.yml` | archetype `gitops` — kustomize build, kubeconform, helm lint, pinning and secret gates | [docs/gitops-ci.md](docs/gitops-ci.md) |
 
 Archetype workflows are the surface a repo actually calls — a caller names its archetype and nothing else. See [docs/archetypes.md](docs/archetypes.md) for which exist and which are still waiting on the workflows they depend on.
 
@@ -41,7 +42,7 @@ Archetype workflows are the surface a repo actually calls — a caller names its
 | `dbt-project` | `dbt-project.yml` |
 | `dlt-pipeline` | `dlt-pipeline.yml` |
 
-Still to come, in this order: `security-baseline`, `container-ci` (needs the registry choice), coverage checks, `ai-review`, `conformance-audit`. Two surfaces have no workflow because the standard names no tooling for them yet: JS/TS for the `web-app` archetype, and infrastructure, which has no archetype at all. Both need an RFC before they can have CI.
+Still to come, in this order: `security-baseline`, `container-ci` (needs the registry choice), coverage checks, `ai-review`, `conformance-audit`. One surface has no workflow because the standard names no tooling for it: JS/TS for the `web-app` archetype, which needs an RFC adding a §5 row before it can have CI.
 
 ## Configs are vendored, not fetched
 

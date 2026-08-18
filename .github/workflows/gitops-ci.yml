@@ -1,0 +1,256 @@
+name: gitops-ci
+
+# Reusable CI for the `gitops` archetype: one install's desired state, pulled by
+# that install's Flux. Callers pin an exact version:
+#
+#   jobs:
+#     ci:
+#       uses: datumlabsio/actions/.github/workflows/gitops-ci.yml@v0.2.0
+#
+# This repo is never pushed to a cluster by CI. Flux pulls from it (DES §4), so
+# nothing here needs cluster credentials and nothing here is granted any.
+#
+# Every gate runs without a cluster. `kustomize build` renders offline and
+# kubeconform validates the result against schemas, so a pull request is checked
+# in seconds rather than against a live reconciler.
+
+on:
+  workflow_call:
+    inputs:
+      root:
+        description: "Directory holding the desired state, if not the repo root."
+        type: string
+        default: "."
+
+      config-dir:
+        description: "Where the vendored configs live, relative to root."
+        type: string
+        default: "."
+
+      kubernetes-version:
+        description: "API version kubeconform validates against."
+        type: string
+        default: "1.31.0"
+
+      generic-paths:
+        description: >-
+          Space-separated paths that must stay reusable across installs — no
+          hostname, no IP, no client name. Empty skips the check.
+        type: string
+        default: "platform applications charts"
+
+      chart-paths:
+        description: "Where charts we author live. Empty skips helm lint."
+        type: string
+        default: "charts"
+
+      yamllint:
+        type: boolean
+        default: true
+
+      build:
+        description: "kustomize build every overlay, then validate the output."
+        type: boolean
+        default: true
+
+      ignore-missing-schemas:
+        description: >-
+          Let kubeconform pass a custom resource it has no schema for. Off by
+          default: a CRD with no schema is unvalidated, and silently unvalidated
+          is how a broken manifest reaches a cluster.
+        type: boolean
+        default: false
+
+      image-pinning:
+        description: "Fail on a :latest or untagged image."
+        type: boolean
+        default: true
+
+      plaintext-secrets:
+        description: "Fail on a Secret with inline data."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  gitops:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.root }}
+    env:
+      CONFIG_DIR: ${{ inputs.config-dir }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Vendored configs present and stamped
+        run: |
+          missing=0
+          for f in .yamllint gitops-tool-versions.txt; do
+            p="$CONFIG_DIR/$f"
+            if [ ! -f "$p" ]; then
+              echo "::error::$p not found. It is vendored in by the scaffold — copy it from datumlabsio/actions/configs/."
+              missing=1
+              continue
+            fi
+            if ! head -3 "$p" | grep -q '^# datum-config:'; then
+              echo "::error::$p has no '# datum-config:' version stamp. A vendored config is bumped, never hand-written."
+              missing=1
+              continue
+            fi
+            echo "  $(head -1 "$p" | sed 's/^# //')  ($p)"
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
+      - name: Install the pinned toolchain
+        run: |
+          set -euo pipefail
+          # Versions come from the repo's own vendored pins, so a local run and
+          # CI use the same ones.
+          get() { grep "^$1=" "$CONFIG_DIR/gitops-tool-versions.txt" | cut -d= -f2; }
+          KUSTOMIZE=$(get kustomize); KUBECONFORM=$(get kubeconform)
+          HELM=$(get helm);           YAMLLINT=$(get yamllint)
+          mkdir -p "$RUNNER_TEMP/bin"
+
+          curl -sSL --fail "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE}/kustomize_${KUSTOMIZE}_linux_amd64.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/bin" kustomize
+          curl -sSL --fail "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/bin" kubeconform
+          curl -sSL --fail "https://get.helm.sh/helm-${HELM}-linux-amd64.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/bin" --strip-components=1 linux-amd64/helm
+          pipx install "yamllint==${YAMLLINT}" >/dev/null
+
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/kustomize" version
+          "$RUNNER_TEMP/bin/kubeconform" -v
+          "$RUNNER_TEMP/bin/helm" version --short
+
+      - name: YAML lint
+        if: inputs.yamllint
+        run: yamllint -c "$CONFIG_DIR/.yamllint" .
+
+      - name: Charts we author lint clean
+        if: inputs.chart-paths != ''
+        run: |
+          set -euo pipefail
+          found=0
+          for base in ${{ inputs.chart-paths }}; do
+            [ -d "$base" ] || continue
+            while IFS= read -r chart; do
+              found=1
+              echo "== helm lint $(dirname "$chart") =="
+              helm lint "$(dirname "$chart")"
+            done < <(find "$base" -name Chart.yaml)
+          done
+          [ "$found" -eq 1 ] || echo "::notice::No charts found under ${{ inputs.chart-paths }}; nothing to lint."
+
+      # kustomize build renders offline, so every overlay is validated without a
+      # cluster. kubeconform then checks the result against real API schemas —
+      # including Flux's own CRDs, from the community catalog.
+      - name: Build every overlay and validate the output
+        if: inputs.build
+        env:
+          K8S_VERSION: ${{ inputs.kubernetes-version }}
+          IGNORE_MISSING: ${{ inputs.ignore-missing-schemas }}
+        run: |
+          set -euo pipefail
+          CRDS="https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+          extra=()
+          [ "$IGNORE_MISSING" = "true" ] && extra=(-ignore-missing-schemas)
+
+          overlays=$(find . -name kustomization.yaml -not -path './.git/*' -exec dirname {} \; | sort)
+          if [ -z "$overlays" ]; then
+            echo "::error::No kustomization.yaml anywhere. A gitops repo's desired state is built by kustomize."
+            exit 1
+          fi
+
+          rc=0
+          for dir in $overlays; do
+            echo "== kustomize build $dir =="
+            if ! kustomize build "$dir" > "$RUNNER_TEMP/rendered.yaml"; then
+              echo "::error::kustomize build failed in $dir"
+              rc=1
+              continue
+            fi
+            if ! kubeconform -strict -summary \
+                 -kubernetes-version "$K8S_VERSION" \
+                 -schema-location default -schema-location "$CRDS" \
+                 "${extra[@]}" "$RUNNER_TEMP/rendered.yaml"; then
+              echo "::error::kubeconform rejected the output of $dir"
+              rc=1
+            fi
+          done
+          exit "$rc"
+
+      # An image without a tag, or on :latest, means the cluster's actual state
+      # depends on when it last pulled. Rollback cannot work against that.
+      - name: Images are pinned
+        if: inputs.image-pinning
+        run: |
+          set -euo pipefail
+          hits=$(grep -rnE '^\s*image:\s*\S+' --include='*.yaml' --include='*.yml' . \
+                 | grep -vE '@sha256:[0-9a-f]{64}' \
+                 | grep -E ':latest\s*$|image:\s*[^:@[:space:]]+\s*$' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::An image is on :latest or has no tag. Pin a tag, or better a digest:"
+            printf '%s\n' "$hits"
+            exit 1
+          fi
+          echo "Every image is pinned."
+
+      - name: No plaintext secrets
+        if: inputs.plaintext-secrets
+        run: |
+          set -euo pipefail
+          # A Secret with inline data belongs in the secret manager, referenced
+          # by SealedSecret or ExternalSecret. DES §6 has no exceptions.
+          hits=$(grep -rlE '^kind:\s*Secret\s*$' --include='*.yaml' --include='*.yml' . || true)
+          bad=""
+          for f in $hits; do
+            if grep -qE '^\s*(data|stringData):\s*$' "$f"; then
+              bad="$bad $f"
+            fi
+          done
+          if [ -n "$bad" ]; then
+            echo "::error::A Secret carries inline data. Reference the secret manager instead (DES §6):"
+            for f in $bad; do echo "  $f"; done
+            exit 1
+          fi
+          echo "No plaintext secrets."
+
+      # A file that names one client cannot be updated from the template, and it
+      # is how a component quietly stops being reusable.
+      - name: Reusable paths name no install
+        if: inputs.generic-paths != ''
+        run: |
+          set -euo pipefail
+          # An array rather than a space-joined string: word splitting is what
+          # we want here, and an array gets it without shellcheck having to be
+          # silenced — and without breaking on a path containing a space.
+          present=()
+          for base in ${{ inputs.generic-paths }}; do
+            [ -d "$base" ] && present+=("$base")
+          done
+          if [ "${#present[@]}" -eq 0 ]; then
+            echo "::notice::None of ${{ inputs.generic-paths }} exist; nothing to check."
+            exit 0
+          fi
+          # An IP must be a standalone token: a four-part image tag like
+          # clickhouse-server:24.8.4.13 is not an address, and requiring the
+          # preceding character not to be ':' or a digit keeps those out.
+          # `image:` lines are skipped entirely — a registry hostname and a
+          # version tag both belong to the image-pinning gate, not this one.
+          hits=$(grep -rInE '(^|[^0-9.:])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9.]|$)|([a-z0-9-]+\.)+(com|io|net|dev|local)' \
+                   --include='*.yaml' --include='*.yml' "${present[@]}" \
+                 | grep -vE '^[^:]+:[0-9]+:[[:space:]]*-?[[:space:]]*image:' \
+                 | grep -vE 'datum\.local|127\.0\.0\.1|0\.0\.0\.0|cluster\.local|schema|apiVersion|helm\.sh|fluxcd\.io|k8s\.io|githubusercontent\.com' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::A hostname or IP appears in a path that must stay reusable across installs."
+            echo "           Move it to this install's values."
+            printf '%s\n' "$hits"
+            exit 1
+          fi
+          echo "Reusable paths are install-agnostic."
