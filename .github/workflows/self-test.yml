@@ -15,26 +15,27 @@ permissions:
 jobs:
   # The workflows must at least be parseable. A malformed workflow file fails
   # at dispatch time with a message that points nowhere useful.
-  yaml-valid:
+  # actionlint rather than a YAML parse. A parse cannot see a duplicated job
+  # key — PyYAML silently keeps the last one — and knows nothing about Actions
+  # semantics: a called workflow asking for more permissions than its caller
+  # grants, an input that does not exist, a bad `needs`. Both of those shipped
+  # here before this job existed, and both fail at startup with no readable log.
+  lint-workflows:
     runs-on: ubuntu-latest
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
     steps:
       - name: Check out
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Workflows parse
+      - name: Lint every workflow
         run: |
-          python3 - <<'PY'
-          import glob, sys, yaml
-          bad = 0
-          for f in sorted(glob.glob('.github/workflows/*.yml')):
-              try:
-                  yaml.safe_load(open(f))
-                  print(f"  OK  {f}")
-              except yaml.YAMLError as e:
-                  print(f"  FAIL {f}: {e}")
-                  bad = 1
-          sys.exit(bad)
-          PY
+          curl -sSL --fail \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            | tar xz actionlint
+          ./actionlint -version
+          ./actionlint
+          echo "All workflows lint clean."
 
   # docs-ci run against this repo, with every optional check switched on, so a
   # change to any of them is exercised here first.
@@ -75,18 +76,8 @@ jobs:
 
   # release in dry-run: the version derivation runs against this repo's real
   # history on every pull request, so a change to it cannot ship untested.
-  # Nothing is tagged and nothing is published.
-  release-dry-run:
-    permissions:
-      contents: read
-    uses: ./.github/workflows/release.yml
-    with:
-      dry-run: true
-
-  # release in dry-run: the version derivation runs against this repo's real
-  # history on every pull request, so a change to it cannot ship untested.
   # Nothing is tagged and nothing is published, so self-test's read-only token
-  # is enough — and this job is what would catch a permissions regression in
+  # is enough — and this job is what catches a permissions regression in
   # release.yml, because asking for more than the caller grants fails at
   # startup rather than in a step.
   release-dry-run:

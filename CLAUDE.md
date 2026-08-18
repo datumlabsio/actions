@@ -11,8 +11,12 @@ Reusable workflows must live in `.github/workflows/`. GitHub does not find them 
 ## Commands
 
 ```bash
-# Workflows must parse. A malformed workflow fails at dispatch with a useless message.
-python3 -c "import glob,yaml,sys; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('WORKFLOWS PARSE')"
+# Lint the workflows. Do NOT substitute a YAML parse: it cannot see a duplicated
+# job key (PyYAML keeps the last one silently) and knows nothing about Actions
+# semantics. Both of those have shipped here and both fail at startup with no
+# readable log. Same version CI pins.
+brew install actionlint 2>/dev/null || true   # or download the pinned release
+actionlint
 
 # Third-party actions pinned by SHA; our own repo and local paths pinned by tag (DES §4).
 grep -rnE "^[[:space:]]*uses:" .github/workflows/ | grep -vE "uses:[[:space:]]*(\./|datumlabsio/)" | grep -v "@[0-9a-f]\{40\}" || echo "ALL THIRD-PARTY ACTIONS SHA-PINNED"
@@ -26,6 +30,8 @@ done; echo "PERMISSIONS CHECKED"
 ```
 
 `self-test.yml` runs the real workflows against this repo on every pull request. That is the test that matters; the commands above are what to run before pushing.
+
+**A workflow change is not verified until CI has reported on it.** Two startup failures reached `main` here because a pull request was merged while its checks had not run — and a startup failure produces no job, no step and no log, so there is nothing to read afterwards. Wait for the checks.
 
 ## Conventions
 
