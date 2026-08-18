@@ -158,8 +158,8 @@ jobs:
         run: |
           set -euo pipefail
           CRDS="https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
-          extra=""
-          [ "$IGNORE_MISSING" = "true" ] && extra="-ignore-missing-schemas"
+          extra=()
+          [ "$IGNORE_MISSING" = "true" ] && extra=(-ignore-missing-schemas)
 
           overlays=$(find . -name kustomization.yaml -not -path './.git/*' -exec dirname {} \; | sort)
           if [ -z "$overlays" ]; then
@@ -178,7 +178,7 @@ jobs:
             if ! kubeconform -strict -summary \
                  -kubernetes-version "$K8S_VERSION" \
                  -schema-location default -schema-location "$CRDS" \
-                 $extra "$RUNNER_TEMP/rendered.yaml"; then
+                 "${extra[@]}" "$RUNNER_TEMP/rendered.yaml"; then
               echo "::error::kubeconform rejected the output of $dir"
               rc=1
             fi
@@ -227,11 +227,14 @@ jobs:
         if: inputs.generic-paths != ''
         run: |
           set -euo pipefail
-          present=""
+          # An array rather than a space-joined string: word splitting is what
+          # we want here, and an array gets it without shellcheck having to be
+          # silenced — and without breaking on a path containing a space.
+          present=()
           for base in ${{ inputs.generic-paths }}; do
-            [ -d "$base" ] && present="$present $base"
+            [ -d "$base" ] && present+=("$base")
           done
-          if [ -z "$present" ]; then
+          if [ "${#present[@]}" -eq 0 ]; then
             echo "::notice::None of ${{ inputs.generic-paths }} exist; nothing to check."
             exit 0
           fi
@@ -241,7 +244,7 @@ jobs:
           # `image:` lines are skipped entirely — a registry hostname and a
           # version tag both belong to the image-pinning gate, not this one.
           hits=$(grep -rInE '(^|[^0-9.:])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9.]|$)|([a-z0-9-]+\.)+(com|io|net|dev|local)' \
-                   --include='*.yaml' --include='*.yml' $present \
+                   --include='*.yaml' --include='*.yml' "${present[@]}" \
                  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*-?[[:space:]]*image:' \
                  | grep -vE 'datum\.local|127\.0\.0\.1|0\.0\.0\.0|cluster\.local|schema|apiVersion|helm\.sh|fluxcd\.io|k8s\.io|githubusercontent\.com' || true)
           if [ -n "$hits" ]; then
