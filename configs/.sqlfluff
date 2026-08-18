@@ -1,0 +1,49 @@
+# datum-config: sqlfluff v1
+# Vendored from datumlabsio/actions/configs/.sqlfluff. Bump it, do not edit it.
+#
+# One shared SQL config for dbt and everything else (DES §5). Rules only — no
+# path-shaped keys, because this file sits at a different depth in every repo.
+#
+# The dbt templater needs a working dbt project to resolve ref() and source().
+# A repo with no dbt project overrides `templater` to `jinja` in its own
+# .sqlfluffignore-adjacent settings, or passes templater: jinja to the workflow.
+
+[sqlfluff]
+dialect = ansi
+templater = dbt
+max_line_length = 120
+exclude_rules = RF01
+# RF01 (references must resolve) is excluded because the dbt templater already
+# fails on an unresolvable ref, and sqlfluff duplicates it noisily on sources.
+
+[sqlfluff:indentation]
+indented_joins = False
+indented_using_on = True
+template_blocks_indent = False
+
+[sqlfluff:layout:type:comma]
+line_position = trailing
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.identifiers]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.literals]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.types]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:aliasing.table]
+aliasing = explicit
+
+[sqlfluff:rules:aliasing.column]
+aliasing = explicit
+
+[sqlfluff:rules:ambiguous.column_references]
+group_by_and_order_by_style = consistent

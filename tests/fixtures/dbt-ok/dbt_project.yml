@@ -1,0 +1,17 @@
+name: datum_fixture
+version: "1.0.0"
+profile: datum_fixture
+config-version: 2
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+target-path: "target"
+
+models:
+  datum_fixture:
+    staging:
+      +materialized: view
+      +schema: staging
+    marts:
+      +materialized: table
+      +schema: marts

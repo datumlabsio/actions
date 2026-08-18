@@ -1,0 +1,25 @@
+version: 2
+
+models:
+  - name: stg_orders
+    description: >-
+      One row per order, straight from the raw seed with nothing dropped.
+      Staging does renaming and typing only — no business logic.
+    columns:
+      - name: order_id
+        description: Primary key of the order.
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: The customer who placed the order.
+        data_tests:
+          - not_null
+      - name: status
+        description: Order lifecycle state as the source system reports it.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["completed", "returned"]
+      - name: amount
+        description: Order value in the source currency.

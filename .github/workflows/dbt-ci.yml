@@ -1,0 +1,201 @@
+name: dbt-ci
+
+# Reusable CI for the `dbt-project` archetype (DES §8). Callers pin a tag:
+#
+#   jobs:
+#     ci:
+#       uses: datumlabsio/actions/.github/workflows/dbt-ci.yml@v1
+#       secrets: inherit
+#
+# Enforces blocks/dbt.md §6: dbt build green, YAML coverage, SQL linting, and
+# artifacts kept so quality history is continuous.
+#
+# Configs are vendored into the repo, not fetched from here — see
+# configs/README.md and docs/dbt-ci.md.
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version for uv to install."
+        type: string
+        default: "3.12"
+
+      working-directory:
+        description: "The dbt project directory, if it is not the repo root."
+        type: string
+        default: "."
+
+      config-dir:
+        description: "Where the vendored configs live, relative to working-directory."
+        type: string
+        default: "."
+
+      profiles-dir:
+        description: "Where profiles.yml lives, relative to working-directory."
+        type: string
+        default: "."
+
+      dbt-target:
+        description: >-
+          Target in profiles.yml to run against. This is a CI target — never
+          production. CI does not hold production credentials (DES §4).
+        type: string
+        default: "ci"
+
+      adapter-requirements:
+        description: >-
+          File listing the warehouse adapter, relative to working-directory.
+          The adapter differs per install, so it is the repo's business and
+          not part of the shared pins.
+        type: string
+        default: "requirements.txt"
+
+      mart-path:
+        description: "Path segment identifying mart models, for the contract check."
+        type: string
+        default: "marts"
+
+      lint:
+        description: "Run sqlfluff against the shared config."
+        type: boolean
+        default: true
+
+      yaml-coverage:
+        description: "Every model documented, tested, and marts contracted."
+        type: boolean
+        default: true
+
+      build:
+        description: "Run dbt build. Needs a reachable CI target."
+        type: boolean
+        default: true
+
+      upload-artifacts:
+        description: >-
+          Keep manifest.json and run_results.json as a build artifact, so
+          quality history is continuous (dbt.md §6).
+        type: boolean
+        default: true
+
+    secrets:
+      dbt-env:
+        description: >-
+          Optional. Newline-separated KEY=VALUE lines exported before dbt runs,
+          for a CI target that needs credentials. Never pass production
+          credentials here.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  dbt:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      CONFIG_DIR: ${{ inputs.config-dir }}
+      DBT_PROFILES_DIR: ${{ inputs.profiles-dir }}
+      DBT_TARGET: ${{ inputs.dbt-target }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install "${{ inputs.python-version }}"
+
+      - name: Vendored configs present and stamped
+        run: |
+          missing=0
+          for f in .sqlfluff dbt-tool-versions.txt dbt-yaml-coverage.py; do
+            p="$CONFIG_DIR/$f"
+            if [ ! -f "$p" ]; then
+              echo "::error::$p not found. It is vendored in by the scaffold — copy it from datumlabsio/actions/configs/."
+              missing=1
+              continue
+            fi
+            if ! head -3 "$p" | grep -q '^# datum-config:'; then
+              echo "::error::$p has no '# datum-config:' version stamp. A vendored config is bumped, never hand-written."
+              missing=1
+              continue
+            fi
+            echo "  $(head -1 "$p" | sed 's/^# //')  ($p)"
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
+      - name: Warehouse adapter declared
+        run: |
+          if [ ! -f "${{ inputs.adapter-requirements }}" ]; then
+            echo "::error::${{ inputs.adapter-requirements }} not found. A dbt project declares its warehouse adapter."
+            exit 1
+          fi
+          cat "${{ inputs.adapter-requirements }}"
+
+      # The secrets context is not available in a step-level `if`, so the step
+      # always runs and decides for itself.
+      - name: Export CI credentials
+        env:
+          DBT_ENV: ${{ secrets.dbt-env }}
+        run: |
+          if [ -z "$DBT_ENV" ]; then
+            echo "No dbt-env secret passed; the $DBT_TARGET target must need no credentials."
+            exit 0
+          fi
+          # Written to the job environment, never echoed. dbt reads these
+          # through env_var() in profiles.yml.
+          count=0
+          while IFS= read -r line; do
+            case "$line" in ''|'#'*) continue ;; esac
+            echo "$line" >> "$GITHUB_ENV"
+            count=$((count + 1))
+          done <<< "$DBT_ENV"
+          echo "Exported $count variable(s) for the $DBT_TARGET target."
+
+      - name: Install dbt and sqlfluff
+        run: |
+          uv venv
+          uv pip install \
+            -r "$CONFIG_DIR/dbt-tool-versions.txt" \
+            -r "${{ inputs.adapter-requirements }}"
+
+      # Binaries are called out of .venv directly rather than through `uv run`,
+      # which expects a project to resolve against. A dbt project has no
+      # pyproject.toml.
+      - name: dbt deps
+        run: .venv/bin/dbt deps --target "$DBT_TARGET"
+
+      - name: dbt parse
+        run: .venv/bin/dbt parse --no-partial-parse --target "$DBT_TARGET"
+
+      - name: YAML coverage
+        if: inputs.yaml-coverage
+        run: |
+          .venv/bin/python "$CONFIG_DIR/dbt-yaml-coverage.py" \
+            --manifest target/manifest.json \
+            --mart-path "${{ inputs.mart-path }}"
+
+      - name: SQL lint
+        if: inputs.lint
+        run: .venv/bin/sqlfluff lint models/
+
+      - name: dbt build
+        if: inputs.build
+        run: .venv/bin/dbt build --target "$DBT_TARGET"
+
+      - name: Keep artifacts
+        if: ${{ always() && inputs.upload-artifacts }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dbt-artifacts
+          path: |
+            ${{ inputs.working-directory }}/target/manifest.json
+            ${{ inputs.working-directory }}/target/run_results.json
+          if-no-files-found: warn
+          retention-days: 30

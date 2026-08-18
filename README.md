@@ -29,8 +29,9 @@ That is the whole file. If a repo's CI has steps of its own, something has gone 
 |---|---|---|
 | `docs-ci.yml` | archetype `docs` — standards and documentation repos | [docs/docs-ci.md](docs/docs-ci.md) |
 | `python-ci.yml` | any Python surface — ruff, mypy, pytest, pre-commit, under uv | [docs/python-ci.md](docs/python-ci.md) |
+| `dbt-ci.yml` | archetype `dbt-project` — sqlfluff, YAML coverage, dbt build | [docs/dbt-ci.md](docs/dbt-ci.md) |
 
-Still to come, in this order: `security-baseline`, `container-ci`, `release`, coverage checks, `dbt-ci`, `ai-review`, `conformance-audit`.
+Still to come, in this order: `release`, `security-baseline` (needs the SAST choice), `container-ci` (needs the registry choice), coverage checks, `ai-review`, `conformance-audit`. Two surfaces have no workflow because the standard names no tooling for them yet: JS/TS for the `web-app` archetype, and infrastructure, which has no archetype at all. Both need an RFC before they can have CI.
 
 ## Configs are vendored, not fetched
 
