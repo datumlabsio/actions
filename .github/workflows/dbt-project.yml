@@ -1,0 +1,77 @@
+name: dbt-project
+
+# The caller surface for the `dbt-project` archetype (DES §8):
+#
+#   jobs:
+#     ci:
+#       uses: datumlabsio/actions/.github/workflows/dbt-project.yml@v1.0.0
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        type: string
+        default: "3.12"
+      working-directory:
+        type: string
+        default: "."
+      config-dir:
+        type: string
+        default: "."
+      profiles-dir:
+        type: string
+        default: "."
+      dbt-target:
+        type: string
+        default: "ci"
+      adapter-requirements:
+        type: string
+        default: "requirements.txt"
+      mart-path:
+        type: string
+        default: "marts"
+      lint:
+        type: boolean
+        default: true
+      yaml-coverage:
+        type: boolean
+        default: true
+      build:
+        type: boolean
+        default: true
+      upload-artifacts:
+        type: boolean
+        default: true
+      commit-lint:
+        description: "Validate the pull request title (DES §3)."
+        type: boolean
+        default: true
+    secrets:
+      dbt-env:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    if: inputs.commit-lint && github.event_name == 'pull_request'
+    uses: ./.github/workflows/commit-lint.yml
+
+  dbt:
+    uses: ./.github/workflows/dbt-ci.yml
+    with:
+      python-version: ${{ inputs.python-version }}
+      working-directory: ${{ inputs.working-directory }}
+      config-dir: ${{ inputs.config-dir }}
+      profiles-dir: ${{ inputs.profiles-dir }}
+      dbt-target: ${{ inputs.dbt-target }}
+      adapter-requirements: ${{ inputs.adapter-requirements }}
+      mart-path: ${{ inputs.mart-path }}
+      lint: ${{ inputs.lint }}
+      yaml-coverage: ${{ inputs.yaml-coverage }}
+      build: ${{ inputs.build }}
+      upload-artifacts: ${{ inputs.upload-artifacts }}
+    secrets:
+      dbt-env: ${{ secrets.dbt-env }}

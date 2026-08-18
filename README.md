@@ -33,6 +33,14 @@ That is the whole file. If a repo's CI has steps of its own, something has gone 
 | `release.yml` | cutting a SemVer release from Conventional Commits | [docs/release.md](docs/release.md) |
 | `commit-lint.yml` | validating a pull request title, so the merge stays versionable | [docs/release.md](docs/release.md) |
 
+Archetype workflows are the surface a repo actually calls — a caller names its archetype and nothing else. See [docs/archetypes.md](docs/archetypes.md) for which exist and which are still waiting on the workflows they depend on.
+
+| Archetype | Workflow |
+|---|---|
+| `docs` | `docs.yml` |
+| `dbt-project` | `dbt-project.yml` |
+| `dlt-pipeline` | `dlt-pipeline.yml` |
+
 Still to come, in this order: `security-baseline`, `container-ci` (needs the registry choice), coverage checks, `ai-review`, `conformance-audit`. Two surfaces have no workflow because the standard names no tooling for them yet: JS/TS for the `web-app` archetype, and infrastructure, which has no archetype at all. Both need an RFC before they can have CI.
 
 ## Configs are vendored, not fetched

@@ -1,0 +1,65 @@
+name: docs
+
+# The caller surface for the `docs` archetype (DES §8). A repo names its
+# archetype, not the checks it happens to need:
+#
+#   name: ci
+#   on: [pull_request, push]
+#   permissions:
+#     contents: read
+#   jobs:
+#     ci:
+#       uses: datumlabsio/actions/.github/workflows/docs.yml@v1.0.0
+#       with:
+#         placeholder-paths: "standards/ vision/"
+#
+# Adding a gate for every docs repo is then one change here, rather than a pull
+# request in each of them (DES §2).
+
+on:
+  workflow_call:
+    inputs:
+      link-check:
+        type: boolean
+        default: true
+      placeholder-paths:
+        type: string
+        default: ""
+      vocabulary-denylist:
+        type: string
+        default: ""
+      vocabulary-scan-paths:
+        type: string
+        default: "."
+      vocabulary-allow-files:
+        type: string
+        default: ""
+      rfc-dir:
+        type: string
+        default: ""
+      spec-dir:
+        type: string
+        default: ""
+      commit-lint:
+        description: "Validate the pull request title (DES §3)."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    if: inputs.commit-lint && github.event_name == 'pull_request'
+    uses: ./.github/workflows/commit-lint.yml
+
+  docs:
+    uses: ./.github/workflows/docs-ci.yml
+    with:
+      link-check: ${{ inputs.link-check }}
+      placeholder-paths: ${{ inputs.placeholder-paths }}
+      vocabulary-denylist: ${{ inputs.vocabulary-denylist }}
+      vocabulary-scan-paths: ${{ inputs.vocabulary-scan-paths }}
+      vocabulary-allow-files: ${{ inputs.vocabulary-allow-files }}
+      rfc-dir: ${{ inputs.rfc-dir }}
+      spec-dir: ${{ inputs.spec-dir }}
