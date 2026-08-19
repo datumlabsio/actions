@@ -5,7 +5,7 @@ This directory holds the org's shared tool configs. It is the source of truth; i
 Every repo carries its own copy of the configs that apply to it, vendored in by its scaffold with a version stamp at the top. CI reads the repo's copy. That means:
 
 - **A developer's local run matches CI.** `ruff check` on a laptop reads the same file the runner reads. Nobody discovers a lint rule at pull-request time.
-- **Nothing is fetched at runtime**, so no repo needs a token to read a private repo, and CI has one less thing that can fail for a reason unrelated to the code.
+- **Nothing is fetched at runtime**, so CI has one less thing that can fail for a reason unrelated to the code, and a config change arrives as a reviewable bump rather than silently altering every build at once. This repo is public now, so fetching *would* work — vendoring is a choice, not a workaround.
 - **Drift is caught rather than prevented.** The stamp says which version a repo carries; the org conformance workflow flags repos behind a supported version, and Renovate opens the bump.
 
 The rule that makes this work is the same one RFC-0010 set for `.claude/`: a vendored asset is **bumped, never hand-edited**. A repo MAY extend a config in its own `pyproject.toml`; it MUST NOT weaken one without a written reason in the repo (DES §5).

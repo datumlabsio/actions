@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   ci:
-    uses: datumlabsio/actions/.github/workflows/docs-ci.yml@v0.1.0
+    uses: datumlabsio/actions/.github/workflows/docs-ci.yml@v0.2.0
 ```
 
 That is the whole file. If a repo's CI has steps of its own, something has gone wrong — either the gate belongs here, or the repo is doing something that needs an RFC.
@@ -48,7 +48,11 @@ Still to come, in this order: `security-baseline`, `container-ci` (needs the reg
 
 Tool configs live in [`configs/`](configs/README.md) as the canonical copy, and every repo carries its own vendored copy with a version stamp. CI reads the repo's copy, not this one.
 
-That is so a developer's local `ruff check` reads the same file the runner reads. It also means no repo needs a token to read this private repo at runtime. The cost is that configs can drift, which the version stamp, the conformance audit, and Renovate between them catch. A vendored config is bumped, never hand-edited — the same rule RFC-0010 set for `.claude/`.
+That is so a developer's local `ruff check` reads the same file the runner reads.
+
+One of the original reasons no longer applies, and it is worth saying so rather than leaving a justification that has quietly expired: vendoring was partly chosen because this repo was private and a laptop could not fetch from it. Now it could. The remaining reasons stand on their own and were always the better ones — nothing is fetched at runtime, so CI has one less thing that can fail for a reason unrelated to the code, and a config change arrives as a reviewable bump in each repo rather than silently altering every build at once.
+
+The cost is that configs can drift, which the version stamp, the conformance audit and Renovate between them catch. A vendored config is bumped, never hand-edited — the same rule RFC-0010 set for `.claude/`.
 
 ## Versioning
 
@@ -79,4 +83,8 @@ Renovate then opens the bump in each downstream repo. Once there are more than a
 
 ## Access
 
-This repo is private. Its workflows are callable from other repos in the org because **Settings → Actions → General → Access** is set to *Accessible from repositories in the datumlabsio organization*. If a caller ever fails with "workflow not found", check that setting first.
+This repo is **public**, so its workflows are callable from anywhere — any repo in the org whatever its visibility, and any per-install engagement org. While it was private neither of those worked: private reusable workflows reach only same-org private repos, which left the org's own public repos unable to call them at all, and cross-org sharing needing GitHub Enterprise.
+
+Public is safe here because of one rule, enforced rather than remembered: **environment-specific values arrive as inputs or org variables, never as literals.** No account ids, role ARNs, workload-identity paths, internal hostnames, IP addresses or client names in a file. `tests/no_literal_env_values.py` checks it on every pull request.
+
+None of those are secrets on their own. Together they are a map of what to attack and who to attack it for, and a map is worth withholding even when every road on it is public.
