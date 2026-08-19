@@ -34,6 +34,7 @@ That is the whole file. If a repo's CI has steps of its own, something has gone 
 | `commit-lint.yml` | validating a pull request title, so the merge stays versionable | [docs/release.md](docs/release.md) |
 | `gitops-ci.yml` | archetype `gitops` — kustomize build, kubeconform, helm lint, pinning and secret gates | [docs/gitops-ci.md](docs/gitops-ci.md) |
 | `changed-paths.yml` | a monorepo deciding which components a pull request touched | [docs/changed-paths.md](docs/changed-paths.md) |
+| `web-ci.yml` | any JS/TS surface — pnpm, Biome, tsc, Vitest with coverage | [docs/web-ci.md](docs/web-ci.md) |
 
 Archetype workflows are the surface a repo actually calls — a caller names its archetype and nothing else. See [docs/archetypes.md](docs/archetypes.md) for which exist and which are still waiting on the workflows they depend on.
 
@@ -42,8 +43,11 @@ Archetype workflows are the surface a repo actually calls — a caller names its
 | `docs` | `docs.yml` |
 | `dbt-project` | `dbt-project.yml` |
 | `dlt-pipeline` | `dlt-pipeline.yml` |
+| `web-app` | `web-app.yml` |
 
-Still to come, in this order: `security-baseline`, `container-ci` (needs the registry choice), coverage checks, `ai-review`, `conformance-audit`. One surface has no workflow because the standard names no tooling for it: JS/TS for the `web-app` archetype, which needs an RFC adding a §5 row before it can have CI.
+Still to come, in this order: `security-baseline`, `container-ci` (needs the registry choice), `ai-review`, `conformance-audit`.
+
+`web-app.yml` covers `lint → typecheck → test → build` and deliberately stops there: §8 says a `web-app` deploys as a container and the registry is not chosen yet, so `scan → publish` wait on that decision. Adding them is additive and needs no caller change.
 
 ## Configs are vendored, not fetched
 

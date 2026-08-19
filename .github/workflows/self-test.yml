@@ -148,3 +148,60 @@ jobs:
             esac
           done
           echo "changed-paths outputs are well-formed."
+
+  # web-ci against a real React + Vite fixture carrying the vendored configs
+  # exactly as a scaffolded repo would: biome, tsc, vitest with coverage, and a
+  # real build. A change to configs/biome.json or the pinned versions breaks here
+  # before it reaches a front end.
+  web-ci:
+    uses: ./.github/workflows/web-ci.yml
+    with:
+      working-directory: tests/fixtures/web-ok
+
+  # The §11 phase-in is the one piece of logic in web-ci that a passing fixture
+  # cannot exercise: the fixture is at 100%, so the below-threshold branch never
+  # runs. This drives it directly — a draft repo under the threshold must warn
+  # and pass, and a production repo under it must fail. Getting this backwards
+  # either blocks every draft repo or silently exempts production.
+  web-coverage-phase-in:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Draft under threshold warns; production under threshold fails
+        run: |
+          set -euo pipefail
+
+          gate() {
+            local pct="$1" phase="$2" threshold="$3"
+            local below
+            below=$(node -e "process.stdout.write(($pct < $threshold) ? 'yes' : 'no')")
+            if [ "$below" = "yes" ] && [ "$phase" = "production" ]; then
+              return 1
+            fi
+            return 0
+          }
+
+          fail=0
+          expect() { # $1=expected(pass|block) $2=pct $3=phase $4=threshold
+            if gate "$2" "$3" "$4"; then got=pass; else got=block; fi
+            if [ "$got" != "$1" ]; then
+              echo "::error::pct=$2 phase=$3 threshold=$4 -> $got, expected $1"
+              fail=1
+            else
+              echo "  ok: pct=$2 phase=$3 -> $got"
+            fi
+          }
+
+          expect pass  100  draft      80
+          expect pass  100  production 80
+          expect pass  42   draft      80
+          expect block 42   production 80
+          expect pass  80   production 80
+          expect block 79.9 production 80
+          expect pass  0    draft      80
+          expect block 0    production 80
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "Coverage phase-in behaves correctly in both phases (DES §11)."

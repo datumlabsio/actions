@@ -1,0 +1,210 @@
+name: web-ci
+
+# Reusable CI for JavaScript / TypeScript. Callers pin a version tag:
+#
+#   jobs:
+#     ci:
+#       uses: datumlabsio/actions/.github/workflows/web-ci.yml@v0.5.0
+#
+# Toolchain per DES §5 (RFC-0011): pnpm for packages, turbo for workspaces,
+# Biome for lint and format, TypeScript strict, Vitest for tests and coverage.
+#
+# Configs are NOT fetched from here at runtime. Every repo carries its own
+# vendored copy, put there by its scaffold and bumped like a dependency, so a
+# developer's local run reads the same file CI reads. Tool versions come from the
+# repo's web-tool-versions.txt for the same reason.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "Directory holding the project, if it is not the repo root."
+        type: string
+        default: "."
+
+      config-dir:
+        description: >-
+          Where the repo's vendored configs live, relative to
+          working-directory.
+        type: string
+        default: "."
+
+      lint:
+        description: "Run biome ci (lint + format check in one pass)."
+        type: boolean
+        default: true
+
+      typecheck:
+        description: "Run tsc --noEmit."
+        type: boolean
+        default: true
+
+      test:
+        description: "Run vitest with coverage."
+        type: boolean
+        default: true
+
+      build:
+        description: "Run the repo's build script."
+        type: boolean
+        default: true
+
+      phase:
+        description: >-
+          DES §11: a draft repo MUST report coverage but MAY fall below the
+          threshold; a repo serving production MUST meet it. Reporting happens
+          either way — only the gate waits.
+        type: string
+        default: "draft"
+
+      coverage-threshold:
+        description: "Percent of changed-line coverage required in production."
+        type: number
+        default: 80
+
+      upload-artifacts:
+        description: "Upload the build output and coverage report."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      CONFIG_DIR: ${{ inputs.config-dir }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # The repo's vendored pins are the source of truth, not this workflow.
+      # A repo that forgot to vendor the file gets a clear failure rather than
+      # a silent fall back to whatever the runner ships.
+      - name: Read the repo's pinned tool versions
+        id: versions
+        run: |
+          set -euo pipefail
+          f="$CONFIG_DIR/web-tool-versions.txt"
+          if [ ! -f "$f" ]; then
+            echo "::error::$f is missing. It is vendored by the scaffold and read here;"
+            echo "without it there is no pinned toolchain and local runs cannot match CI."
+            exit 1
+          fi
+          for key in node pnpm; do
+            v=$(grep -E "^${key}=" "$f" | tail -1 | cut -d= -f2- | tr -d '[:space:]')
+            if [ -z "$v" ]; then
+              echo "::error::$f does not pin '$key'."
+              exit 1
+            fi
+            echo "${key}=${v}" >> "$GITHUB_OUTPUT"
+            echo "  ${key} = ${v}"
+          done
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+
+      # Installed at the pinned version rather than via a third-party action.
+      # One less action to pin and bump, and the version comes from the same
+      # vendored file everything else reads.
+      - name: Install pnpm
+        run: npm install --global "pnpm@${{ steps.versions.outputs.pnpm }}"
+
+      # Pinned to a fixed path rather than assuming pnpm's default, which differs
+      # by platform and pnpm version. A cache key pointing at the wrong directory
+      # silently caches nothing and nobody notices except in the bill.
+      - name: Pin the pnpm store location
+        run: pnpm config set store-dir "$HOME/.pnpm-store" --global
+
+      - name: Cache the pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles(format('{0}/pnpm-lock.yaml', inputs.working-directory)) }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      # --frozen-lockfile is the point: CI must fail on a lockfile that does not
+      # match package.json rather than quietly resolving something else.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint and format check
+        if: inputs.lint
+        run: |
+          set -euo pipefail
+          cfg="$CONFIG_DIR/biome.json"
+          if [ ! -f "$cfg" ]; then
+            echo "::error::$cfg is missing. DES §5 makes the pinned linter the convention;"
+            echo "a repo without the vendored config is not running the org's rules."
+            exit 1
+          fi
+          # `biome ci` is lint + format check in one pass, and is non-writing by
+          # design — it fails rather than reformatting, which is what CI wants.
+          pnpm exec biome ci --config-path "$cfg" .
+
+      - name: Typecheck
+        if: inputs.typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Test with coverage
+        if: inputs.test
+        id: test
+        env:
+          PHASE: ${{ inputs.phase }}
+          THRESHOLD: ${{ inputs.coverage-threshold }}
+        run: |
+          set -euo pipefail
+
+          # DES §11, as amended by RFC-0011: coverage is REPORTED in every
+          # phase so the number is visible and the trend is real. The threshold
+          # is enforced only once a repo serves production. Reporting
+          # unconditionally is what stops "we'll add tests later" from being
+          # invisible.
+          pnpm exec vitest run --coverage --coverage.reporter=text \
+            --coverage.reporter=json-summary --coverage.reporter=lcov
+
+          summary="coverage/coverage-summary.json"
+          if [ ! -f "$summary" ]; then
+            echo "::warning::no coverage summary at $summary; cannot report a number."
+            exit 0
+          fi
+
+          pct=$(node -e "
+            const s = require('./$summary');
+            process.stdout.write(String(s.total.lines.pct));
+          ")
+          echo "Line coverage: ${pct}%"
+          echo "coverage=$pct" >> "$GITHUB_OUTPUT"
+          echo "### Coverage: ${pct}%" >> "$GITHUB_STEP_SUMMARY"
+
+          below=$(node -e "process.stdout.write(($pct < $THRESHOLD) ? 'yes' : 'no')")
+
+          if [ "$below" = "yes" ]; then
+            if [ "$PHASE" = "production" ]; then
+              echo "::error::Coverage ${pct}% is below the ${THRESHOLD}% required for a repo serving production (DES §11)."
+              exit 1
+            fi
+            echo "::notice::Coverage ${pct}% is below ${THRESHOLD}%. Allowed while this repo is in draft phase; it will block once it serves production (DES §11)."
+          fi
+
+      - name: Build
+        if: inputs.build
+        run: pnpm run build
+
+      - name: Upload build output and coverage
+        if: inputs.upload-artifacts && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-${{ github.run_id }}
+          path: |
+            ${{ inputs.working-directory }}/dist
+            ${{ inputs.working-directory }}/.next
+            ${{ inputs.working-directory }}/coverage
+          if-no-files-found: ignore
+          retention-days: 7
