@@ -78,3 +78,10 @@ The same logic sets the floor for everything else: pins are chosen with at least
 ## Not here yet
 
 `scan → publish`. DES §8 says `web-app` deploys as a container, and the container registry is not chosen. This covers everything up to the artifact and stops. Adding those stages later is additive — no caller changes.
+
+## One runner quirk, in case you hit it elsewhere
+
+`pnpm config set … --global` validates that pnpm's global bin directory is on `PATH`
+before it writes anything, and exits 1 when it is not — which is the case on a stock
+GitHub runner. `web-ci` therefore passes `--store-dir` to `pnpm install` instead of
+configuring it globally. Same result, nothing to validate.

@@ -116,12 +116,15 @@ jobs:
       - name: Install pnpm
         run: npm install --global "pnpm@${{ steps.versions.outputs.pnpm }}"
 
-      # Pinned to a fixed path rather than assuming pnpm's default, which differs
-      # by platform and pnpm version. A cache key pointing at the wrong directory
-      # silently caches nothing and nobody notices except in the bill.
-      - name: Pin the pnpm store location
-        run: pnpm config set store-dir "$HOME/.pnpm-store" --global
-
+      # The store path is passed to `pnpm install` below rather than written to
+      # pnpm's global config: `pnpm config set --global` first validates that
+      # pnpm's global bin directory is on PATH and exits 1 on a runner where it
+      # is not, which is every GitHub runner. Passing the flag has nothing to
+      # validate.
+      #
+      # It is pinned to a fixed path rather than left to pnpm's default, which
+      # differs by platform and pnpm version. A cache key pointing at the wrong
+      # directory silently caches nothing, and nobody notices except in the bill.
       - name: Cache the pnpm store
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -132,7 +135,7 @@ jobs:
       # --frozen-lockfile is the point: CI must fail on a lockfile that does not
       # match package.json rather than quietly resolving something else.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --store-dir "$HOME/.pnpm-store"
 
       - name: Lint and format check
         if: inputs.lint
