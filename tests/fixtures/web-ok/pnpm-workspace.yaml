@@ -1,0 +1,22 @@
+# pnpm does not run a dependency's install scripts unless it is listed here.
+# That default is a supply-chain control (DES §6) — an arbitrary postinstall is
+# how a compromised package gets code execution — so the allowlist stays
+# explicit and short. esbuild places a platform binary in its postinstall and
+# vite cannot build without it.
+onlyBuiltDependencies:
+  - esbuild
+
+# pnpm also refuses packages published within `minimumReleaseAge`, which is what
+# catches a freshly-compromised release before anyone notices. A transitive range
+# like `vitest@^4.1.0` resolves to the newest match and can therefore pull a
+# version the policy then rejects — so the sub-packages are held at the same
+# aged version as the direct pin. Bumped by Renovate together.
+overrides:
+  vitest: 4.1.10
+  "@vitest/spy": 4.1.10
+  "@vitest/utils": 4.1.10
+  "@vitest/runner": 4.1.10
+  "@vitest/snapshot": 4.1.10
+  "@vitest/expect": 4.1.10
+  "@vitest/mocker": 4.1.10
+  "@vitest/pretty-format": 4.1.10

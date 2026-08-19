@@ -27,3 +27,15 @@ Style arguments are pull requests against these files. They are not comments on 
 ## The one constraint
 
 **No path-shaped keys.** No `exclude`, no `src`, no `files`, no `mypy_path`, no per-file ignores. Those resolve differently depending on where the config sits, and these files sit in a different place in every repo. Anything path-shaped belongs in the repo's own `pyproject.toml`.
+
+## The web-app configs
+
+| File | Vendored into | Read by |
+|---|---|---|
+| `biome.json` | every `web-app` repo | `biome ci` |
+| `tsconfig.base.json` | every `web-app` repo | the repo's `tsconfig.json`, via `extends` |
+| `web-tool-versions.txt` | every `web-app` repo | `web-ci`, and a developer's local run |
+
+`tsconfig.base.json` obeys the no-path-shaped-keys rule the same way the others do: it carries compiler options only. `include`, `exclude` and `paths` belong in the repo's own `tsconfig.json`, because they resolve relative to wherever the file sits.
+
+Two of the pins are deliberately behind the newest release, and the reasoning is in [docs/web-ci.md](../docs/web-ci.md#why-the-pinned-versions-are-not-the-newest): Node tracks Active LTS rather than current, and TypeScript stays on 5.9 until the 7.x native rewrite has more than a handful of patch releases behind it.

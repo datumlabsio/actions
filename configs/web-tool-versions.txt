@@ -1,0 +1,17 @@
+# Pinned tool versions for the web-app archetype. Vendored into every web-app
+# repo by its scaffold and read by web-ci.yml, so a developer's local run uses
+# the same versions CI does.
+#
+# Bumped, never hand-edited. Renovate opens the bump.
+#
+# node is the Active LTS line (24 "Krypton"), not the newest release.
+#
+# typescript is deliberately NOT the newest major. 7.x is the native rewrite and
+# had one patch release when this was pinned; 6.x had two. 5.9 has twenty-four
+# and is what the org's front ends already run. A standard pins proven, and
+# Renovate will offer the major when the ecosystem has caught up.
+node=24.19.0
+pnpm=11.22.0
+biome=2.5.7
+typescript=5.9.3
+vitest=4.1.10

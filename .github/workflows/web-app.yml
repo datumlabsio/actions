@@ -1,0 +1,71 @@
+name: web-app
+
+# The caller surface for the `web-app` archetype (DES §8):
+#
+#   jobs:
+#     ci:
+#       uses: datumlabsio/actions/.github/workflows/web-app.yml@v0.5.0
+#       with:
+#         phase: draft
+#
+# scan → publish are deliberately absent. §8 says web-app deploys as a container
+# and the registry is not chosen yet, so this covers everything up to the
+# artifact and stops. Adding them later is additive — no caller changes.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        default: "."
+      config-dir:
+        type: string
+        default: "."
+      lint:
+        type: boolean
+        default: true
+      typecheck:
+        type: boolean
+        default: true
+      test:
+        type: boolean
+        default: true
+      build:
+        type: boolean
+        default: true
+      phase:
+        description: >-
+          DES §11: draft reports coverage, production is gated on it.
+        type: string
+        default: "draft"
+      coverage-threshold:
+        type: number
+        default: 80
+      upload-artifacts:
+        type: boolean
+        default: true
+      commit-lint:
+        description: "Validate the pull request title (DES §3)."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    if: inputs.commit-lint && github.event_name == 'pull_request'
+    uses: ./.github/workflows/commit-lint.yml
+
+  web:
+    uses: ./.github/workflows/web-ci.yml
+    with:
+      working-directory: ${{ inputs.working-directory }}
+      config-dir: ${{ inputs.config-dir }}
+      lint: ${{ inputs.lint }}
+      typecheck: ${{ inputs.typecheck }}
+      test: ${{ inputs.test }}
+      build: ${{ inputs.build }}
+      phase: ${{ inputs.phase }}
+      coverage-threshold: ${{ inputs.coverage-threshold }}
+      upload-artifacts: ${{ inputs.upload-artifacts }}
