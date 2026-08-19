@@ -101,3 +101,50 @@ jobs:
     uses: ./.github/workflows/gitops-ci.yml
     with:
       root: tests/fixtures/gitops-ok
+
+  # changed-paths against this repo's own history on every pull request. The
+  # folders are real ones here, so the git diff runs against real commits rather
+  # than a fixture — the only way to know the base-commit wiring works for both
+  # a pull request and a push.
+  changed-paths:
+    uses: ./.github/workflows/changed-paths.yml
+    with:
+      paths: "configs tests docs"
+      run-all-on: ".github/workflows/changed-paths.yml"
+
+  # A reusable workflow's outputs are easy to break silently: a typo in the
+  # `value:` expression yields an empty string, not an error, and every caller's
+  # `if:` then evaluates false and skips every gate. This asserts the output
+  # actually arrives.
+  changed-paths-outputs:
+    needs: changed-paths
+    runs-on: ubuntu-latest
+    steps:
+      - name: The outputs are populated
+        env:
+          CHANGED: ${{ needs.changed-paths.outputs.changed }}
+          ANY: ${{ needs.changed-paths.outputs.any }}
+        run: |
+          set -euo pipefail
+          echo "changed='$CHANGED' any='$ANY'"
+
+          case "$ANY" in
+            true|false) ;;
+            *) echo "::error::'any' output is '$ANY', expected true or false"; exit 1 ;;
+          esac
+
+          # `changed` may legitimately be empty — a pull request touching none of
+          # the three folders and not tripping run-all-on. What must never
+          # happen is `any=true` with nothing named, or a folder named that was
+          # not asked for.
+          if [ "$ANY" = "true" ] && [ -z "$CHANGED" ]; then
+            echo "::error::any=true but no folder was named"
+            exit 1
+          fi
+          for folder in $CHANGED; do
+            case "$folder" in
+              configs|tests|docs) ;;
+              *) echo "::error::named '$folder', which was not in the input"; exit 1 ;;
+            esac
+          done
+          echo "changed-paths outputs are well-formed."
