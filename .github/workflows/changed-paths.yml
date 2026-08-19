@@ -1,0 +1,128 @@
+name: changed-paths
+
+# Which of a monorepo's component folders changed. Callers pin an exact version:
+#
+#   jobs:
+#     changes:
+#       uses: datumlabsio/actions/.github/workflows/changed-paths.yml@v0.4.0
+#       with:
+#         paths: "platform analytics pipelines"
+#         run-all-on: ".pre-commit-config.yaml ruff.toml .github/"
+#
+#     platform:
+#       needs: changes
+#       if: contains(needs.changes.outputs.changed, 'platform')
+#       uses: datumlabsio/actions/.github/workflows/gitops-ci.yml@v0.4.0
+#
+# It exists so a monorepo's CI stays a thin caller. Doing the git diff inline in
+# each monorepo would be bespoke CI, which DES §4 forbids — and it would be the
+# same twenty lines copied into every repo, fixed in none of them.
+#
+# One output rather than one per folder, because a reusable workflow must declare
+# its outputs statically and the folder list is the caller's business.
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        description: >-
+          Space-separated top-level folders to test. A folder counts as changed
+          when any file under it changed.
+        type: string
+        required: true
+
+      run-all-on:
+        description: >-
+          Space-separated path prefixes that mean "everything changed". A repo's
+          shared root files belong here: change the pre-commit config or a
+          vendored linter config and every component needs re-testing, even
+          though no component folder was touched. Prefix match, so a bare
+          filename matches that file and a folder name matches everything under
+          it.
+        type: string
+        required: false
+        default: ""
+
+    outputs:
+      changed:
+        description: >-
+          Space-separated folders that changed. Test it with
+          contains(needs.<job>.outputs.changed, '<folder>').
+        value: ${{ jobs.detect.outputs.changed }}
+      any:
+        description: "'true' when at least one of the folders changed."
+        value: ${{ jobs.detect.outputs.any }}
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.detect.outputs.changed }}
+      any: ${{ steps.detect.outputs.any }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Compare against the base
+        id: detect
+        env:
+          PATHS: ${{ inputs.paths }}
+          RUN_ALL_ON: ${{ inputs.run-all-on }}
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+
+          # A first push, a force-push, or a squash can leave no usable base.
+          # Run everything rather than silently skipping every gate — a CI run
+          # that quietly checks nothing is worse than one that checks too much.
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$base" 2>/dev/null; then
+            echo "::notice::No usable base commit; treating every folder as changed."
+            changed="$PATHS"
+          else
+            files=$(git diff --name-only "$base" HEAD)
+
+            # A shared root file changed, so every component is affected even
+            # though no component folder was touched.
+            trigger=""
+            for prefix in $RUN_ALL_ON; do
+              if printf '%s\n' "$files" | grep -q "^${prefix}"; then
+                trigger="$prefix"
+                break
+              fi
+            done
+
+            if [ -n "$trigger" ]; then
+              echo "::notice::${trigger} changed, which affects every component; treating every folder as changed."
+              changed="$PATHS"
+              echo "changed=$(echo "$changed" | xargs)" >> "$GITHUB_OUTPUT"
+              echo "any=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            changed=""
+            for folder in $PATHS; do
+              if printf '%s\n' "$files" | grep -q "^${folder}/"; then
+                changed="$changed $folder"
+              fi
+            done
+            changed="$(echo "$changed" | xargs || true)"
+          fi
+
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          if [ -n "$changed" ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Changed: ${changed:-none}"
