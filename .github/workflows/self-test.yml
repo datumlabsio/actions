@@ -268,3 +268,50 @@ jobs:
       # GITHUB_TOKEN is scoped to this repo and the filter matches nothing, so
       # there is nothing for it to act on.
       renovate-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # workflows-ci on this repo. Positive case: everything here must be clean.
+  workflows-ci:
+    uses: ./.github/workflows/workflows-ci.yml
+
+  # And the negative case, because a gate nobody has watched refuse anything is
+  # a gate you hope works.
+  #
+  # This cannot be a `uses:` job — actionlint correctly points out that
+  # continue-on-error is not available on one, so a job that is SUPPOSED to fail
+  # would just fail the run. Instead it lifts the checker out of workflows-ci.yml
+  # and runs that exact source against a fixture, so there is no second copy to
+  # drift.
+  #
+  # The fixture is broken two ways at once: a version that does not exist, and an
+  # input that workflow never declared.
+  workflows-ci-blocks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: The pin check refuses an unresolvable pin
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 - <<'EXTRACT'
+          import pathlib, re, sys
+
+          src = pathlib.Path(".github/workflows/workflows-ci.yml").read_text()
+          m = re.search(r"python3 - <<'PY'\n(.*?)\n          PY\n", src, re.S)
+          if not m:
+              sys.exit("could not lift the pin checker out of workflows-ci.yml")
+          body = "\n".join(
+              line[10:] if line.startswith(" " * 10) else line
+              for line in m.group(1).split("\n")
+          )
+          pathlib.Path("/tmp/pin_check.py").write_text(body)
+          print(f"lifted {len(body.splitlines())} lines")
+          EXTRACT
+          cd tests/fixtures/pins-bad
+          if python3 /tmp/pin_check.py; then
+            echo "::error::workflows-ci accepted a pin to a version that does not exist."
+            echo "::error::The gate does not block, which is worse than not having it."
+            exit 1
+          fi
+          echo "Correctly refused."

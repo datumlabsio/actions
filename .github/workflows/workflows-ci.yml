@@ -1,0 +1,234 @@
+name: workflows-ci
+
+# Reusable CI for a repo's own automation. Callers pin a version tag:
+#
+#   jobs:
+#     workflows:
+#       uses: datumlabsio/actions/.github/workflows/workflows-ci.yml@v0.9.0
+#
+# WHY THIS EXISTS. Every repo in the org has workflows, and nothing checked them
+# except this repo's own self-test. Two failures were already paid for here:
+#
+#   1. A duplicated job key. PyYAML silently keeps the last duplicate, so a YAML
+#      parse passes and Actions sees a workflow missing a job.
+#   2. A called workflow requesting more permissions than its caller granted.
+#
+# Both fail at STARTUP, producing no log to read — the run is just
+# `startup_failure`. Both are things actionlint catches and a parser cannot.
+# They broke this repo's main branch once. That is not a lesson worth every repo
+# in the org learning separately.
+#
+# The pin check is the other half. DES §4 requires a thin caller to pin an exact
+# version tag, and a pin that does not resolve satisfies the letter of that rule
+# while failing in the first repo somebody creates — as `workflow not found`,
+# which reads like their mistake rather than the template's.
+
+on:
+  workflow_call:
+    inputs:
+      actionlint:
+        description: "Lint every workflow with actionlint. Also runs shellcheck over run: blocks."
+        type: boolean
+        default: true
+
+      actionlint-version:
+        description: "Pinned, so a new actionlint release cannot change what CI accepts overnight."
+        type: string
+        default: "1.7.12"
+
+      verify-pins:
+        description: >-
+          For every `uses: datumlabsio/actions/...@ref`, confirm the workflow
+          exists at that ref and declares each input and secret being passed to
+          it. Needs no token for public refs.
+        type: boolean
+        default: true
+
+      validate-renovate:
+        description: >-
+          Validate any Renovate config present. A config Renovate cannot read
+          does not error — it matches nothing and reports success, which is
+          indistinguishable from "everything is current".
+        type: boolean
+        default: true
+
+      renovate-version:
+        description: "Validate against the major that actually runs, not whatever npx resolves."
+        type: string
+        default: "44"
+
+      working-directory:
+        description: >-
+          Where to look. A monorepo component keeps its own workflows, and
+          this repo's self-test points it at fixtures to prove the gate
+          actually blocks rather than asserting that it does.
+        type: string
+        default: "."
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    if: ${{ inputs.actionlint }}
+    runs-on: ubuntu-latest
+    env:
+      ACTIONLINT_VERSION: ${{ inputs.actionlint-version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Lint every workflow
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          set -euo pipefail
+          if [ ! -d .github/workflows ]; then
+            echo "::notice::No .github/workflows directory. Nothing to lint."
+            exit 0
+          fi
+          curl -sSL --fail \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            | tar xz actionlint
+          ./actionlint -version
+          ./actionlint
+          echo "All workflows lint clean."
+
+  pins:
+    if: ${{ inputs.verify-pins }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Every datumlabsio/actions pin resolves and accepts what it is passed
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 - <<'PY'
+          import sys, urllib.request
+          from pathlib import Path
+
+          import yaml
+
+          WF = Path(".github/workflows")
+          if not WF.is_dir():
+              print("::notice::No .github/workflows directory. Nothing to verify.")
+              sys.exit(0)
+
+          PREFIX = "datumlabsio/actions/.github/workflows/"
+
+          def triggers(doc):
+              """YAML 1.1 parses a bare `on` as the boolean True.
+
+              So a called workflow's trigger block is doc[True], not doc["on"].
+              Reading only doc["on"] would find nothing, declare every caller
+              valid, and pass forever — the exact silent success this job exists
+              to prevent.
+              """
+              return doc.get("on") or doc.get(True) or {}
+
+          def fetch(ref, wf):
+              url = f"https://raw.githubusercontent.com/datumlabsio/actions/{ref}/.github/workflows/{wf}"
+              try:
+                  with urllib.request.urlopen(url, timeout=20) as r:
+                      return r.read().decode()
+              except Exception as exc:  # noqa: BLE001
+                  return None if getattr(exc, "code", None) == 404 else False
+
+          def declares(text):
+              call = triggers(yaml.safe_load(text)).get("workflow_call") or {}
+              return set(call.get("inputs") or {}) | set(call.get("secrets") or {})
+
+          def line_of(path, needle):
+              for n, line in enumerate(path.read_text().splitlines(), 1):
+                  if needle in line and not line.lstrip().startswith("#"):
+                      return n
+              return 0
+
+          problems, checked, cache = [], 0, {}
+
+          for f in sorted(list(WF.glob("*.yml")) + list(WF.glob("*.yaml"))):
+              try:
+                  doc = yaml.safe_load(f.read_text())
+              except yaml.YAMLError as exc:
+                  problems.append(f"{f}: will not parse as YAML: {exc}")
+                  continue
+              if not isinstance(doc, dict):
+                  continue
+
+              for job_name, job in (doc.get("jobs") or {}).items():
+                  if not isinstance(job, dict):
+                      continue
+                  uses = job.get("uses")
+                  if not isinstance(uses, str) or not uses.startswith(PREFIX):
+                      continue
+
+                  checked += 1
+                  wf, _, ref = uses[len(PREFIX):].partition("@")
+                  where = f"{f}:{line_of(f, uses)} (job '{job_name}')"
+
+                  if not ref:
+                      problems.append(f"{where}: no version pin. DES §4 requires an exact version tag.")
+                      continue
+
+                  if (ref, wf) not in cache:
+                      cache[(ref, wf)] = fetch(ref, wf)
+                  text = cache[(ref, wf)]
+
+                  if text is False:
+                      print(f"::warning::{where}: could not reach {wf}@{ref}. Skipped, not failed.")
+                      continue
+                  if text is None:
+                      problems.append(
+                          f"{where}: {wf} does not exist at {ref}. A pin that does not "
+                          f"resolve fails as 'workflow not found' in the first repo that calls it."
+                      )
+                      continue
+
+                  have = declares(text)
+                  want = set(job.get("with") or {})
+                  secrets = job.get("secrets")
+                  if isinstance(secrets, dict):
+                      want |= set(secrets)
+
+                  missing = sorted(want - have)
+                  if missing:
+                      problems.append(
+                          f"{where}: {wf}@{ref} does not declare {missing}. "
+                          f"An input that does not exist is a startup failure with no log."
+                      )
+
+          if problems:
+              print(f"{len(problems)} unresolved pin(s) (DES §4):", file=sys.stderr)
+              for problem in problems:
+                  print(f"  {problem}", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"{checked} datumlabsio/actions pin(s) resolve and accept what they are passed.")
+          PY
+
+  renovate:
+    if: ${{ inputs.validate-renovate }}
+    runs-on: ubuntu-latest
+    env:
+      RENOVATE_VERSION: ${{ inputs.renovate-version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Validate every Renovate config present
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          set -euo pipefail
+          files=""
+          for f in default.json renovate.json .renovaterc .renovaterc.json; do
+            [ -f "$f" ] && files="$files $f"
+          done
+          if [ -z "$files" ]; then
+            echo "::notice::No Renovate config in this repo. Nothing to validate."
+            exit 0
+          fi
+          echo "Validating:$files"
+          # shellcheck disable=SC2086
+          npx --yes --package "renovate@${RENOVATE_VERSION}" renovate-config-validator $files

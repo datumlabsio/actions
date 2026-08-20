@@ -1,0 +1,9 @@
+name: ci
+on: [push]
+# Deliberately broken, two ways at once: a version that does not exist, and an
+# input that workflow never declared. Both are startup failures with no log.
+jobs:
+  docs:
+    uses: datumlabsio/actions/.github/workflows/docs.yml@v99.0.0
+    with:
+      this-input-does-not-exist: true
