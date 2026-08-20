@@ -248,3 +248,23 @@ jobs:
         run: |
           set -euo pipefail
           python3 configs/no-stale-quarantine.py configs/no-stale-quarantine.py
+
+  # renovate.yml in dry-run, so the engine, the pinned version and the org preset
+  # are all exercised on every pull request — without a token and without opening
+  # anything anywhere.
+  #
+  # The failure this catches is the quiet one: a Renovate major that renames a
+  # config field does not error, it just finds nothing to update, which is
+  # indistinguishable from "everything is current". Validating the preset at the
+  # pinned version is the only thing that tells them apart.
+  renovate-dry-run:
+    uses: ./.github/workflows/renovate.yml
+    with:
+      dry-run: true
+      # Deliberately matches nothing. The point is to exercise the preset
+      # validation and the engine's startup, not to scan the org on every PR.
+      autodiscover-filter: "datumlabsio/__no_such_repo__"
+    secrets:
+      # GITHUB_TOKEN is scoped to this repo and the filter matches nothing, so
+      # there is nothing for it to act on.
+      renovate-token: ${{ secrets.GITHUB_TOKEN }}
