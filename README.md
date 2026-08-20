@@ -34,7 +34,6 @@ That is the whole file. If a repo's CI has steps of its own, something has gone 
 | `commit-lint.yml` | validating a pull request title, so the merge stays versionable | [docs/release.md](docs/release.md) |
 | `gitops-ci.yml` | archetype `gitops` — kustomize build, kubeconform, helm lint, pinning and secret gates | [docs/gitops-ci.md](docs/gitops-ci.md) |
 | `changed-paths.yml` | a monorepo deciding which components a pull request touched | [docs/changed-paths.md](docs/changed-paths.md) |
-| `renovate.yml` | self-hosted dependency updates, on a schedule | [docs/renovate.md](docs/renovate.md) |
 | `web-ci.yml` | any JS/TS surface — pnpm, Biome, tsc, Vitest with coverage | [docs/web-ci.md](docs/web-ci.md) |
 
 Archetype workflows are the surface a repo actually calls — a caller names its archetype and nothing else. See [docs/archetypes.md](docs/archetypes.md) for which exist and which are still waiting on the workflows they depend on.
