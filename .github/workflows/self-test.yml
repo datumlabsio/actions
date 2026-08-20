@@ -205,3 +205,46 @@ jobs:
 
           [ "$fail" -eq 0 ] || exit 1
           echo "Coverage phase-in behaves correctly in both phases (DES §11)."
+
+  # The §11 quarantine gate, proven on fixtures rather than asserted.
+  #
+  # §12 lists "No disabled test past its fix-or-delete date" as CI-enforced and
+  # nothing enforced it, so a quarantined test could sit disabled forever — the
+  # exact failure the rule exists to prevent, arrived at slowly.
+  #
+  # The third case is the one that matters. A conditional skip is not a
+  # quarantine: skipif/importorskip/runIf say "this test does not apply here",
+  # which is a permanent statement about the environment, not a test nobody is
+  # watching. A gate that flags every platform guard gets switched off in a week.
+  quarantine-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Owned and in date, plus conditional skips, all pass
+        run: |
+          set -euo pipefail
+          python3 configs/no-stale-quarantine.py tests/fixtures/quarantine-ok
+
+      - name: A skip with no owner or date fails
+        run: |
+          set -euo pipefail
+          if python3 configs/no-stale-quarantine.py tests/fixtures/quarantine-unowned; then
+            echo "::error::An unowned quarantine was accepted. The gate does not work."
+            exit 1
+          fi
+          echo "Correctly rejected."
+
+      - name: A quarantine past its date fails
+        run: |
+          set -euo pipefail
+          if python3 configs/no-stale-quarantine.py tests/fixtures/quarantine-expired; then
+            echo "::error::An expired quarantine was accepted. The gate does not work."
+            exit 1
+          fi
+          echo "Correctly rejected."
+
+      - name: The checker does not flag its own documented examples
+        run: |
+          set -euo pipefail
+          python3 configs/no-stale-quarantine.py configs/no-stale-quarantine.py

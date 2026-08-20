@@ -67,6 +67,18 @@ on:
         type: boolean
         default: true
 
+      stale-quarantine:
+        description: >-
+          DES §11: fail when a disabled test carries no owner and date, or its
+          fix-or-delete date has passed. §12 lists this as CI-enforced and
+          nothing enforced it, so a quarantined test could sit disabled forever.
+
+          Phased in the same way as coverage: a repo that has not yet vendored
+          no-stale-quarantine.py gets a notice telling it to, not a failure.
+          Once every archetype ships the file, the notice becomes an error.
+        type: boolean
+        default: true
+
 permissions:
   contents: read
 
@@ -211,3 +223,20 @@ jobs:
             ${{ inputs.working-directory }}/coverage
           if-no-files-found: ignore
           retention-days: 7
+      - name: No stale or unowned quarantines (DES §11)
+        if: ${{ inputs.stale-quarantine }}
+        env:
+          CONFIG_DIR_IN: ${{ inputs.config-dir || '.' }}
+        run: |
+          set -euo pipefail
+          script="$CONFIG_DIR_IN/no-stale-quarantine.py"
+          if [ ! -f "$script" ]; then
+            echo "::notice::$script not vendored yet — skipping the DES §11 quarantine check."
+            echo "::notice::Vendor it from datumlabsio/actions/configs/ (or bump your scaffold) to switch this gate on."
+            exit 0
+          fi
+          if ! head -3 "$script" | grep -q '^# datum-config:'; then
+            echo "::error::$script has no '# datum-config:' version stamp. A vendored config is bumped, never hand-written."
+            exit 1
+          fi
+          python3 "$script" .
