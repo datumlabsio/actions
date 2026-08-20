@@ -1,0 +1,116 @@
+name: renovate
+
+# Self-hosted Renovate. Callers schedule it:
+#
+#   on:
+#     schedule:
+#       - cron: "0 4 * * 1"
+#   jobs:
+#     renovate:
+#       uses: datumlabsio/actions/.github/workflows/renovate.yml@v0.6.0
+#       secrets:
+#         renovate-token: ${{ secrets.RENOVATE_TOKEN }}
+#
+# WHY SELF-HOSTED rather than the Mend-hosted GitHub App:
+#
+# The hosted app needs write access to every repo it manages, held by a
+# third-party service. DES §7 says an agent gets read-only by default and every
+# bot acts under its own identity. A Renovate we run, under a bot identity we
+# own, satisfies both — the hosted app cannot.
+#
+# It also removes a pricing question from the critical path, and it is the same
+# shape as §12's conformance audit: logic here, scheduled caller in .github.
+#
+# The policy is NOT in this file. It lives in datumlabsio/.github/default.json,
+# which every repo's renovate.json extends. This workflow is the engine.
+
+on:
+  workflow_call:
+    inputs:
+      renovate-version:
+        description: >-
+          Renovate major to run. Pinned rather than floating: a major can change
+          config field names, and a silent no-op is the worst outcome for a tool
+          nobody watches.
+        type: string
+        default: "44"
+
+      autodiscover-filter:
+        description: "Which repos to consider. Only those WITH a config are touched."
+        type: string
+        default: "datumlabsio/*"
+
+      dry-run:
+        description: >-
+          Resolve everything and log what would happen without pushing a branch
+          or opening a pull request.
+        type: boolean
+        default: false
+
+      log-level:
+        description: "debug when working out why a repo was skipped."
+        type: string
+        default: "info"
+
+    secrets:
+      renovate-token:
+        description: >-
+          Token for the bot identity. Needs contents:write and pull-requests:write
+          on the target repos, and nothing else.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The config is a 7KB file of regexes and package rules. A version bump that
+  # renames a field does not error — Renovate ignores what it does not recognise
+  # and finds nothing to update, which looks exactly like "no updates available".
+  # Validating at the pinned version turns that into a failure.
+  validate-preset:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the preset repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: datumlabsio/.github
+
+      - name: Validate at the version that will run
+        env:
+          RENOVATE_VERSION: ${{ inputs.renovate-version }}
+        run: |
+          set -euo pipefail
+          npx --yes --package "renovate@${RENOVATE_VERSION}" \
+            renovate-config-validator default.json renovate.json
+
+  renovate:
+    needs: validate-preset
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run Renovate
+        uses: renovatebot/github-action@e09d604f8f803bb527bd8321ed5be06c460b8682 # v46.2.2
+        with:
+          renovate-version: ${{ inputs.renovate-version }}
+          token: ${{ secrets.renovate-token }}
+        env:
+          LOG_LEVEL: ${{ inputs.log-level }}
+          RENOVATE_PLATFORM: github
+          RENOVATE_AUTODISCOVER: "true"
+          RENOVATE_AUTODISCOVER_FILTER: ${{ inputs.autodiscover-filter }}
+
+          # These two are the whole safety model, and they are why this needs no
+          # list of selected repositories.
+          #
+          # onboarding=false: never open a "Configure Renovate" pull request.
+          # requireConfig=required: skip any repo without a renovate.json.
+          #
+          # So a repo opts in by carrying the file — which its scaffold writes at
+          # birth. Nothing to maintain, and the 223 repos that predate the
+          # scaffold are untouched until someone adds the file deliberately.
+          RENOVATE_ONBOARDING: "false"
+          RENOVATE_REQUIRE_CONFIG: required
+
+          RENOVATE_DRY_RUN: ${{ inputs.dry-run && 'full' || '' }}
