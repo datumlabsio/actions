@@ -10,10 +10,33 @@ name: commit-lint
 # The title is what matters because a squash merge uses it as the commit
 # message — so an unconventional title becomes an unversionable commit on main,
 # and the release workflow cannot derive a version from it (DES §3, §10).
+#
+# DO NOT guard the call to this workflow with an `if:` in the caller. Use the
+# `enabled` input. A caller doing this:
+#
+#   title:
+#     if: inputs.commit-lint && github.event_name == 'pull_request'
+#     uses: ./.github/workflows/commit-lint.yml
+#
+# works on a pull request and kills the entire run at STARTUP on a push. The job
+# is skipped, and a skipped job holding a relative reference inside a workflow
+# called from another repository cannot be resolved — the run reports
+# "this run likely failed because of a workflow file issue", with no jobs and no
+# log to read. Every archetype wrapper shipped that shape from v0.1.0 to v0.9.0,
+# so every repo built from a scaffold had a permanently red default branch while
+# its pull request checks stayed green.
 
 on:
   workflow_call:
     inputs:
+      enabled:
+        description: >-
+          Off switch. This lives here rather than as an `if:` on the caller's
+          job, because guarding the call breaks a push run at startup — see the
+          note above.
+        type: boolean
+        default: true
+
       allow-types:
         description: >-
           Pipe-separated Conventional Commit types accepted in a title.
@@ -26,7 +49,10 @@ permissions:
 jobs:
   title:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    # Both conditions belong here, not on the caller. Guarding inside means the
+    # job is always CALLED and skips itself — same outcome for a reader, and it
+    # does not break startup.
+    if: inputs.enabled && github.event_name == 'pull_request'
     steps:
       - name: Title is a Conventional Commit
         env:

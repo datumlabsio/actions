@@ -315,3 +315,49 @@ jobs:
             exit 1
           fi
           echo "Correctly refused."
+
+  # THE ARCHETYPE WRAPPERS. Until now self-test only exercised the -ci workflows
+  # underneath them, so the four files every downstream repo actually names had
+  # no coverage at all — on any event.
+  #
+  # That is how this shipped for nine releases: each wrapper guarded its
+  # commit-lint call with `if: … github.event_name == 'pull_request'`, which
+  # SKIPS the job on a push. A skipped job holding a relative reference inside a
+  # workflow called from another repository cannot be resolved, and the run dies
+  # at startup with no jobs and no log. Pull request checks stayed green, so
+  # every repo built from a scaffold had a permanently red default branch that
+  # nobody was looking at.
+  #
+  # These run on both events, because self-test triggers on pull_request and on
+  # push to main. That is the whole point: the push path is the one that broke.
+  docs-wrapper:
+    uses: ./.github/workflows/docs.yml
+    with:
+      placeholder-paths: "docs/"
+      vocabulary-scan-paths: "tests/fixtures/vocabulary/"
+      vocabulary-allow-files: "rename-history.md"
+
+  # commit-lint: false is the case the old `if:` was written for. It has to work
+  # without skipping the job, or the fix has just moved the bug.
+  docs-wrapper-no-commitlint:
+    uses: ./.github/workflows/docs.yml
+    with:
+      commit-lint: false
+      placeholder-paths: "docs/"
+      vocabulary-scan-paths: "tests/fixtures/vocabulary/"
+      vocabulary-allow-files: "rename-history.md"
+
+  dbt-project-wrapper:
+    uses: ./.github/workflows/dbt-project.yml
+    with:
+      working-directory: tests/fixtures/dbt-ok
+
+  web-app-wrapper:
+    uses: ./.github/workflows/web-app.yml
+    with:
+      working-directory: tests/fixtures/web-ok
+
+  dlt-pipeline-wrapper:
+    uses: ./.github/workflows/dlt-pipeline.yml
+    with:
+      working-directory: tests/fixtures/python-ok
