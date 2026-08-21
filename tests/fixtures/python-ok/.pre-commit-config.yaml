@@ -8,4 +8,9 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+        # A Helm chart's templates/ holds Go templates, not YAML. check-yaml
+        # cannot parse them, and `pre-commit run --all-files` walks the whole git
+        # repo — so this fixture's hooks see the gitops fixture's charts too.
+        # The scaffold ships the same exclusion for the same reason.
+        exclude: '(^|/)charts/[^/]+/templates/'
       - id: check-added-large-files
