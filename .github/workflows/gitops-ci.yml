@@ -130,7 +130,24 @@ jobs:
 
       - name: YAML lint
         if: inputs.yamllint
-        run: yamllint -c "$CONFIG_DIR/.yamllint" .
+        run: |
+          set -euo pipefail
+          # A Helm chart's templates/ holds Go templates, not YAML. `{{- if }}`
+          # and `{{- define }}` are not parseable as YAML and never will be, so
+          # yamllint reports a syntax error on every one of them. They ARE
+          # validated — by `helm lint` below, and by kubeconform on the rendered
+          # output, which is the only point at which they are YAML at all.
+          #
+          # Excluded by path rather than by a rule in .yamllint, because that file
+          # is vendored into repos at different depths and deliberately carries no
+          # path-shaped keys.
+          files=$(git ls-files '*.yaml' '*.yml' \
+                   | grep -vE '(^|/)charts/[^/]+/templates/' || true)
+          if [ -z "$files" ]; then
+            echo "::notice::No YAML outside Helm chart templates. Nothing for yamllint to check."
+            exit 0
+          fi
+          echo "$files" | xargs yamllint -c "$CONFIG_DIR/.yamllint"
 
       - name: Charts we author lint clean
         if: inputs.chart-paths != ''

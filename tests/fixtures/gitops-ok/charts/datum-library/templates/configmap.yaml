@@ -1,0 +1,15 @@
+{{/*
+  A .yaml Helm template — the case that broke polaris and that this fixture
+  lacked. yamllint cannot parse Go template directives and must skip this file;
+  helm lint is what validates it.
+*/}}
+{{- if .Values.createConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "datum.fullname" . }}-config
+  labels:
+    {{- include "datum.labels" . | nindent 4 }}
+data:
+  install: {{ .Values.install | quote }}
+{{- end }}
