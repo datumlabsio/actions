@@ -44,8 +44,13 @@ permissions:
 
 jobs:
   title:
-    if: inputs.commit-lint && github.event_name == 'pull_request'
+    # No `if:` here on purpose. Guarding a `uses:` job means it can be SKIPPED,
+    # and a skipped job with a relative reference inside a cross-repository
+    # called workflow kills the run at startup on a push event — silently, with
+    # no log. The toggle and the event check both live inside commit-lint.yml.
     uses: ./.github/workflows/commit-lint.yml
+    with:
+      enabled: ${{ inputs.commit-lint }}
 
   python:
     uses: ./.github/workflows/python-ci.yml
