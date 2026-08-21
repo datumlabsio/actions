@@ -265,9 +265,12 @@ jobs:
       # validation and the engine's startup, not to scan the org on every PR.
       autodiscover-filter: "datumlabsio/__no_such_repo__"
     secrets:
-      # GITHUB_TOKEN is scoped to this repo and the filter matches nothing, so
-      # there is nothing for it to act on.
-      renovate-token: ${{ secrets.GITHUB_TOKEN }}
+      # Deliberately empty. This repo holds no App credentials, so the run
+      # exercises the missing-credentials guard and exits green — which is the
+      # branch a scheduled run takes before B-06 lands, and the one most likely
+      # to rot unnoticed.
+      app-id: ""
+      private-key: ""
 
   # workflows-ci on this repo. Positive case: everything here must be clean.
   workflows-ci:
