@@ -19,23 +19,13 @@ jobs:
 
 ## Why self-hosted rather than the Mend-hosted app
 
-**Because the hosted app does not scan private repos, and 223 of the org's 228 repos are private.**
+**Because the identity should be ours.** Renovate runs as `datum-police`, a GitHub App we own, and its token is minted when the job starts and revoked when it ends. The hosted app requires a third party to hold `contents: write` and `pull-requests: write` on our repositories indefinitely. DES §7 says every bot acts under its own identity — that is the argument, and it stands on its own.
 
-This was measured, not assumed. The app was installed on `.github`, `actions` and `scaffolds`:
+**A correction, because an earlier version of this section said something false.** It claimed the hosted app does not scan private repositories, and made that the main reason to self-host. It does scan them: it opened a bump pull request on `scaffolds`, which is private. The claim came from watching one repository for an hour and reading silence as incapability — the hosted app was slow on its first pass, not incapable.
 
-| Repo | Visibility | Scanned |
-|---|---|---|
-| `actions` | public | yes, within 9 minutes |
-| `.github` | public | yes, within 9 minutes |
-| `scaffolds` | **private** | **never** |
+Both tools work. We run our own because we would rather hold the credential ourselves, and because §12's conformance audit needs the same identity anyway.
 
-`scaffolds` was not short of things to find — it carries SHA-pinned actions and an `actions_version` pin a full release behind — and `dependencyDashboard` creates its issue whether or not updates exist. Private repos need a paid Mend tier.
-
-That leaves the hosted app covering two repos and none of the ones client work will live in. `scaffolds` is the worst of it: it holds the pin that decides which CI version *every new repo is born on*.
-
-The §7 argument points the same way — an agent gets read-only by default and every bot acts under its own identity, which a third-party app holding write access cannot satisfy. **But coverage is the reason. A safer tool that cannot see the repos is not the safer choice.**
-
-The cost is that we own the schedule and the token. That is the trade, and it is worth it.
+The cost is that we own the schedule and the key. That is the trade.
 
 ## No list of repositories to maintain
 
