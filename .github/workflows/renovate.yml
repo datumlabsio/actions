@@ -62,10 +62,16 @@ on:
         default: "info"
 
     secrets:
-      renovate-token:
+      app-id:
         description: >-
-          Token for the bot identity. Needs contents:write and pull-requests:write
-          on the target repos, and nothing else.
+          App ID of the bot identity. A GitHub App rather than a personal access
+          token, because docs/bot-identities.md in datumlabsio/.github requires
+          an identity of its own — "its own account or app, not a personal
+          token" — and because an App's token is minted per run and expires,
+          where a PAT sits in a secret store until somebody remembers it.
+        required: true
+      private-key:
+        description: "Private key for the same App. Never logged; consumed by the token step."
         required: true
 
 permissions:
@@ -99,30 +105,43 @@ jobs:
       - name: Check out
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      # A scheduled run before the bot identity exists would otherwise fail with
-      # a bare auth error, which reads like a broken workflow rather than a
-      # missing secret. This says which secret and where, exits green, and starts
-      # working on its own the day the token lands — no second edit needed.
-      - name: Is there a token yet?
-        id: token
+      # A scheduled run before the App exists would otherwise fail with a bare
+      # auth error, which reads like a broken workflow rather than a missing
+      # secret. This names what is missing, exits green, and starts working on
+      # its own once the credentials land — no second edit needed.
+      - name: Are the App credentials present?
+        id: creds
         env:
-          TOKEN: ${{ secrets.renovate-token }}
+          APP_ID: ${{ secrets.app-id }}
         run: |
           set -euo pipefail
-          if [ -z "${TOKEN:-}" ]; then
-            echo "::notice::No renovate-token yet, so nothing was scanned."
-            echo "::notice::Create the bot identity (B-06), store its token as RENOVATE_TOKEN in the calling repo, and this starts working on the next run."
+          if [ -z "${APP_ID:-}" ]; then
+            echo "::notice::No App credentials yet, so nothing was scanned."
+            echo "::notice::See B-06 — provision the bot identity, then set DATUM_POLICE_APP_ID and DATUM_POLICE_PRIVATE_KEY as org secrets."
             echo "present=false" >> "$GITHUB_OUTPUT"
           else
             echo "present=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # Minted per run and revoked when the job ends, so there is no long-lived
+      # credential anywhere. `owner` is the org rather than this repository,
+      # because autodiscover has to see every repo the App is installed on, not
+      # just the one holding the schedule.
+      - name: Mint a token for the run
+        id: token
+        if: steps.creds.outputs.present == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.private-key }}
+          owner: ${{ github.repository_owner }}
+
       - name: Run Renovate
-        if: steps.token.outputs.present == 'true'
+        if: steps.creds.outputs.present == 'true'
         uses: renovatebot/github-action@e09d604f8f803bb527bd8321ed5be06c460b8682 # v46.2.2
         with:
           renovate-version: ${{ inputs.renovate-version }}
-          token: ${{ secrets.renovate-token }}
+          token: ${{ steps.token.outputs.token }}
         env:
           LOG_LEVEL: ${{ inputs.log-level }}
           RENOVATE_PLATFORM: github

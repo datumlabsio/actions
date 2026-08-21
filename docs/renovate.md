@@ -67,11 +67,22 @@ This already applies to us: `default.json` uses `fileMatch`, which Renovate 44 a
 
 So the workflow validates the preset **at the pinned version** before running, and `self-test` runs the whole thing in dry-run on every pull request. A version bump that breaks the config fails a check instead of quietly doing nothing.
 
-## The token
+## The identity
 
-Needs `contents: write` and `pull-requests: write` on the target repos, and nothing else. It belongs to a **bot identity**, not a person — DES §7 requires every bot and workflow to act under its own identity, so a personal access token would break the rule this workflow exists to serve.
+It runs as **`datum-police`**, a GitHub App, and that choice is the rule rather than a preference. `docs/bot-identities.md` in `datumlabsio/.github` says an automation gets *"its own account or app, not a personal token"* — and a fine-grained PAT is issued from a person's account no matter which org owns the resources.
 
-Store it as `RENOVATE_TOKEN` in the calling repo's secrets.
+The App holds `contents: write`, `pull-requests: write` and `issues: write` (the last for the Dependency Dashboard) on the repos it is installed on, and nothing else.
+
+**The token is minted per run and revoked when the job ends**, so no long-lived credential sits in a secret store waiting to be forgotten. What is stored is the App id and its private key, as org secrets:
+
+| Secret | |
+|---|---|
+| `DATUM_POLICE_APP_ID` | the App id |
+| `DATUM_POLICE_PRIVATE_KEY` | its private key |
+
+Org-level rather than per-repo, because the conformance audit and the `main` watcher will need the same identity from other repos, and rotating a key in one place beats three.
+
+`owner` is passed as the organisation rather than the calling repository, because `autodiscover` has to see every repo the App is installed on — not just the one holding the schedule.
 
 ## Reading a run
 
