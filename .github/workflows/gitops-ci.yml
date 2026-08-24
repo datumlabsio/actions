@@ -178,6 +178,22 @@ jobs:
           extra=()
           [ "$IGNORE_MISSING" = "true" ] && extra=(-ignore-missing-schemas)
 
+          # CustomResourceDefinition is skipped by kind, narrowly and out loud.
+          #
+          # No schema for it exists in either catalog: the upstream generator
+          # publishes the CRD's *sub*-schemas — customresourcedefinitionnames,
+          # customresourcedefinitionstatus, customresourceconversion — but not
+          # the top-level kind, so kubeconform errors on every CRD a repo
+          # declares. With ignore-missing-schemas off, as it should stay, that
+          # made adding any CRD to a gitops repo impossible.
+          #
+          # This skips the CRD wrapper only. A custom *resource* is untouched
+          # and still validated against the catalog above, which is what the
+          # ignore-missing-schemas warning is actually about. The wrapper is
+          # not unchecked either: kustomize build parses it, yamllint checks it,
+          # and the API server validates it structurally on apply.
+          extra+=(-skip CustomResourceDefinition)
+
           overlays=$(find . -name kustomization.yaml -not -path './.git/*' -exec dirname {} \; | sort)
           if [ -z "$overlays" ]; then
             echo "::error::No kustomization.yaml anywhere. A gitops repo's desired state is built by kustomize."
@@ -275,11 +291,20 @@ jobs:
           # kubernetes.io is named explicitly as well: the list already had
           # k8s.io, which does not match `app.kubernetes.io` at all, so every
           # standard label slipped straight through.
+          #
+          # The last filter clears our OWN domain, and only where it cannot be a
+          # hostname. `datumlabs.io` is not on the allowlist above, deliberately:
+          # we own it, so an install really could be served at
+          # clickhouse.datumlabs.io — the exact thing this gate exists to catch.
+          # It is cleared only as the whole value of a `group:` or `name:` key,
+          # which is a CustomResourceDefinition's API group and its metadata
+          # name. A hostname under any other key, `host:` included, still fails.
           hits=$(grep -rInE '(^|[^0-9.:])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9.]|$)|([a-z0-9-]+\.)+(com|io|net|dev|local)' \
                    --include='*.yaml' --include='*.yml' "${present[@]}" \
                  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*-?[[:space:]]*(image|repository):' \
                  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*-?[[:space:]]*[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}/[A-Za-z0-9._-]+:' \
-                 | grep -vE 'datum\.local|127\.0\.0\.1|0\.0\.0\.0|cluster\.local|schema|apiVersion|helm\.sh|fluxcd\.io|kubernetes\.io|k8s\.io|githubusercontent\.com' || true)
+                 | grep -vE 'datum\.local|127\.0\.0\.1|0\.0\.0\.0|cluster\.local|schema|apiVersion|helm\.sh|fluxcd\.io|kubernetes\.io|k8s\.io|githubusercontent\.com' \
+                 | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(group|name):[[:space:]]*[a-z0-9.-]+\.datumlabs\.io[[:space:]]*$' || true)
           if [ -n "$hits" ]; then
             echo "::error::A hostname or IP appears in a path that must stay reusable across installs."
             echo "           Move it to this install's values."
