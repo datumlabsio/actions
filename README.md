@@ -35,6 +35,7 @@ That is the whole file. If a repo's CI has steps of its own, something has gone 
 | `gitops-ci.yml` | archetype `gitops` — kustomize build, kubeconform, helm lint, pinning and secret gates | [docs/gitops-ci.md](docs/gitops-ci.md) |
 | `changed-paths.yml` | a monorepo deciding which components a pull request touched | [docs/changed-paths.md](docs/changed-paths.md) |
 | `renovate.yml` | self-hosted dependency updates, on a schedule | [docs/renovate.md](docs/renovate.md) |
+| `conformance-audit.yml` | DES §12 — audits repos against what is observable from outside | [docs/conformance-audit.md](docs/conformance-audit.md) |
 | `application.yml` | the caller surface for the `application` archetype | [docs/application-ci.md](docs/application-ci.md) |
 | `container-ci.yml` | lint, build, SBOM, scan, publish to GHCR | [docs/container-ci.md](docs/container-ci.md) |
 | `security-baseline.yml` | Semgrep, gitleaks and a dependency audit — DES §6 | [docs/security-baseline.md](docs/security-baseline.md) |

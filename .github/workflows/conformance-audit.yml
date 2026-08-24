@@ -1,0 +1,142 @@
+name: conformance-audit
+
+# DES §12: compliance that is not checked does not exist. Callers schedule it —
+# the scheduled caller lives in datumlabsio/.github, so the thin-caller rule
+# applies to the audit itself:
+#
+#   jobs:
+#     audit:
+#       uses: datumlabsio/actions/.github/workflows/conformance-audit.yml@v0.14.0
+#       secrets:
+#         app-id: ${{ secrets.DATUM_POLICE_APP_ID }}
+#         private-key: ${{ secrets.DATUM_POLICE_PRIVATE_KEY }}
+#
+# WHAT IT CAN AND CANNOT SEE, which matters more than the check list. It audits
+# what is observable from OUTSIDE a repo: settings, file presence, pin versions,
+# vendored config stamps, whether CODEOWNERS names a team that actually holds
+# write access. It does not re-run what the repo's own CI already decides —
+# "linters pass", "coverage did not fall", "no tag was moved" are facts about a
+# RUN, not about a repo.
+#
+# So a green audit means "this repo is set up to be checked", not "this repo is
+# correct". Conflating those is how a dashboard starts lying.
+
+on:
+  workflow_call:
+    inputs:
+      repos:
+        description: >-
+          Space-separated owner/repo list. Deliberately explicit rather than
+          autodiscovered: which repos the standard binds is a decision (B-30),
+          not something a workflow should assume.
+        type: string
+        required: true
+
+      dry-run:
+        description: >-
+          Report without filing issues. Defaults TRUE — running this against the
+          fleet files an issue against every non-conforming repo, which is a
+          scope decision (B-32) rather than a workflow change.
+        type: boolean
+        default: true
+
+    secrets:
+      app-id:
+        description: "Bot identity — datum-police. Needs issues:write to file findings."
+        required: true
+      private-key:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the audit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: datumlabsio/actions
+
+      - name: Are the App credentials present?
+        id: creds
+        env:
+          APP_ID: ${{ secrets.app-id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_ID:-}" ]; then
+            echo "::notice::No App credentials, so nothing was audited. See B-06."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint a token for the run
+        id: token
+        if: steps.creds.outputs.present == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.private-key }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Audit
+        id: run
+        if: steps.creds.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPOS: ${{ inputs.repos }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          # shellcheck disable=SC2086
+          python3 tests/conformance_audit.py $REPOS
+
+      - name: File or update one issue per drifted repo
+        if: ${{ steps.creds.outputs.present == 'true' && !inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.error, urllib.request
+
+          TOKEN = os.environ["GH_TOKEN"]
+          HOME = os.environ.get("GITHUB_REPOSITORY", "datumlabsio/.github")
+
+          def call(method, path, payload=None):
+              req = urllib.request.Request(
+                  f"https://api.github.com{path}",
+                  method=method,
+                  data=json.dumps(payload).encode() if payload else None,
+              )
+              req.add_header("Accept", "application/vnd.github+json")
+              req.add_header("Authorization", f"Bearer {TOKEN}")
+              if payload:
+                  req.add_header("Content-Type", "application/json")
+              with urllib.request.urlopen(req, timeout=25) as r:
+                  body = r.read()
+                  return json.loads(body) if body.strip() else {}
+
+          findings = json.load(open("conformance-findings.json"))
+          if not findings:
+              print("No drift. Nothing to file.")
+              raise SystemExit(0)
+
+          # One issue per repo, UPDATED rather than duplicated. A new issue every
+          # run is how an audit becomes noise people filter out of their inbox.
+          existing = call("GET", f"/repos/{HOME}/issues?state=open&labels=conformance-drift&per_page=100")
+          by_title = {i["title"]: i["number"] for i in existing}
+
+          for f in findings:
+              title = f"Conformance drift: {f['repo']}"
+              body = f["body"]
+              if title in by_title:
+                  call("PATCH", f"/repos/{HOME}/issues/{by_title[title]}", {"body": body})
+                  print(f"updated #{by_title[title]} — {f['repo']}")
+              else:
+                  made = call("POST", f"/repos/{HOME}/issues",
+                              {"title": title, "body": body, "labels": ["conformance-drift"]})
+                  print(f"filed #{made['number']} — {f['repo']}")
+          PY

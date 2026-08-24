@@ -1,0 +1,53 @@
+[
+  {
+    "repo": "datumlabsio/actions",
+    "archetype": "not declared",
+    "owner": "@datumlabsio/core",
+    "failed": [
+      "Born from current scaffold; archetype declared",
+      "Pre-commit config present; CI runs the same hooks"
+    ],
+    "body": "**Repo:** `datumlabsio/actions`\n**Archetype:** not declared\n**Owning crew:** @datumlabsio/core\n\n### Which checks failed\n\n- [x] Born from current scaffold; archetype declared\n- [x] Pre-commit config present; CI runs the same hooks\n\n### Detail\n\n- **Born from current scaffold; archetype declared** \u2014 no `.copier-answers.yml` \u2014 not born from a scaffold, or the file was deleted. The archetype-specific checks below are skipped, because they presuppose one: reporting five symptoms of a single cause is how a report gets ignored\n- **Pre-commit config present; CI runs the same hooks** \u2014 no `.pre-commit-config.yaml` (\u00a73)\n\n---\n\nFiled by the org conformance workflow (DES \u00a712). It audits what is observable from outside a repo \u2014 settings, files, pins, config stamps. It does not re-run what the repo's own CI already decides, so a green audit means *this repo is set up to be checked*, not *this repo is correct*."
+  },
+  {
+    "repo": "datumlabsio/scaffolds",
+    "archetype": "not declared",
+    "owner": "@datumlabsio/core",
+    "failed": [
+      "Born from current scaffold; archetype declared",
+      "Pre-commit config present; CI runs the same hooks"
+    ],
+    "body": "**Repo:** `datumlabsio/scaffolds`\n**Archetype:** not declared\n**Owning crew:** @datumlabsio/core\n\n### Which checks failed\n\n- [x] Born from current scaffold; archetype declared\n- [x] Pre-commit config present; CI runs the same hooks\n\n### Detail\n\n- **Born from current scaffold; archetype declared** \u2014 no `.copier-answers.yml` \u2014 not born from a scaffold, or the file was deleted. The archetype-specific checks below are skipped, because they presuppose one: reporting five symptoms of a single cause is how a report gets ignored\n- **Pre-commit config present; CI runs the same hooks** \u2014 no `.pre-commit-config.yaml` (\u00a73)\n\n---\n\nFiled by the org conformance workflow (DES \u00a712). It audits what is observable from outside a repo \u2014 settings, files, pins, config stamps. It does not re-run what the repo's own CI already decides, so a green audit means *this repo is set up to be checked*, not *this repo is correct*."
+  },
+  {
+    "repo": "datumlabsio/.github",
+    "archetype": "not declared",
+    "owner": "@datumlabsio/core",
+    "failed": [
+      "Born from current scaffold; archetype declared",
+      "Pre-commit config present; CI runs the same hooks"
+    ],
+    "body": "**Repo:** `datumlabsio/.github`\n**Archetype:** not declared\n**Owning crew:** @datumlabsio/core\n\n### Which checks failed\n\n- [x] Born from current scaffold; archetype declared\n- [x] Pre-commit config present; CI runs the same hooks\n\n### Detail\n\n- **Born from current scaffold; archetype declared** \u2014 no `.copier-answers.yml` \u2014 not born from a scaffold, or the file was deleted. The archetype-specific checks below are skipped, because they presuppose one: reporting five symptoms of a single cause is how a report gets ignored\n- **Pre-commit config present; CI runs the same hooks** \u2014 no `.pre-commit-config.yaml` (\u00a73)\n\n---\n\nFiled by the org conformance workflow (DES \u00a712). It audits what is observable from outside a repo \u2014 settings, files, pins, config stamps. It does not re-run what the repo's own CI already decides, so a green audit means *this repo is set up to be checked*, not *this repo is correct*."
+  },
+  {
+    "repo": "datumlabsio/datum-standards",
+    "archetype": "not declared",
+    "owner": "",
+    "failed": [
+      "Born from current scaffold; archetype declared",
+      "CLAUDE.md, README and CODEOWNERS present",
+      "Pre-commit config present; CI runs the same hooks"
+    ],
+    "body": "**Repo:** `datumlabsio/datum-standards`\n**Archetype:** not declared\n**Owning crew:** _none named \u2014 this is itself a finding_\n\n### Which checks failed\n\n- [x] Born from current scaffold; archetype declared\n- [x] CLAUDE.md, README and CODEOWNERS present\n- [x] Pre-commit config present; CI runs the same hooks\n\n### Detail\n\n- **Born from current scaffold; archetype declared** \u2014 no `.copier-answers.yml` \u2014 not born from a scaffold, or the file was deleted. The archetype-specific checks below are skipped, because they presuppose one: reporting five symptoms of a single cause is how a report gets ignored\n- **CLAUDE.md, README and CODEOWNERS present** \u2014 CODEOWNERS names no `@datumlabsio/` team \u2014 a repo with no owning crew is itself a finding\n- **Pre-commit config present; CI runs the same hooks** \u2014 no `.pre-commit-config.yaml` (\u00a73)\n\n---\n\nFiled by the org conformance workflow (DES \u00a712). It audits what is observable from outside a repo \u2014 settings, files, pins, config stamps. It does not re-run what the repo's own CI already decides, so a green audit means *this repo is set up to be checked*, not *this repo is correct*."
+  },
+  {
+    "repo": "datumlabsio/polaris",
+    "archetype": "monorepo",
+    "owner": "@datumlabsio/polaris",
+    "failed": [
+      "Branch protection per phase policy",
+      "Security baseline active"
+    ],
+    "body": "**Repo:** `datumlabsio/polaris`\n**Archetype:** monorepo\n**Owning crew:** @datumlabsio/polaris\n\n### Which checks failed\n\n- [x] Branch protection per phase policy\n- [x] Security baseline active\n\n### Detail\n\n- scaffold version: `v0.4.4`\n- **Branch protection per phase policy** \u2014 `main` is missing: deletion, non_fast_forward, pull_request\n- CI pins: `v0.9.2`\n- **Security baseline active** \u2014 `ci.yml` does not call `security-baseline` (\u00a76)\n\n---\n\nFiled by the org conformance workflow (DES \u00a712). It audits what is observable from outside a repo \u2014 settings, files, pins, config stamps. It does not re-run what the repo's own CI already decides, so a green audit means *this repo is set up to be checked*, not *this repo is correct*."
+  }
+]
