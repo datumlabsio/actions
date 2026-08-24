@@ -36,6 +36,8 @@ Style arguments are pull requests against these files. They are not comments on 
 | `tsconfig.base.json` | every `web-app` repo | the repo's `tsconfig.json`, via `extends` |
 | `web-tool-versions.txt` | every `web-app` repo | `web-ci`, and a developer's local run |
 | `no-stale-quarantine.py` | any repo with tests | `python-ci` and `web-ci`, DES §11 |
+| `security-tool-versions.txt` | every repo | `security-baseline` — Semgrep and gitleaks pins |
+| `semgrep.yml` | every repo | `security-baseline` — Datum rules, alongside the community packs |
 
 `tsconfig.base.json` obeys the no-path-shaped-keys rule the same way the others do: it carries compiler options only. `include`, `exclude` and `paths` belong in the repo's own `tsconfig.json`, because they resolve relative to wherever the file sits.
 

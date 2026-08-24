@@ -35,6 +35,7 @@ That is the whole file. If a repo's CI has steps of its own, something has gone 
 | `gitops-ci.yml` | archetype `gitops` — kustomize build, kubeconform, helm lint, pinning and secret gates | [docs/gitops-ci.md](docs/gitops-ci.md) |
 | `changed-paths.yml` | a monorepo deciding which components a pull request touched | [docs/changed-paths.md](docs/changed-paths.md) |
 | `renovate.yml` | self-hosted dependency updates, on a schedule | [docs/renovate.md](docs/renovate.md) |
+| `security-baseline.yml` | Semgrep, gitleaks and a dependency audit — DES §6 | [docs/security-baseline.md](docs/security-baseline.md) |
 | `workflows-ci.yml` | a repo's own automation: actionlint, pins resolve, Renovate config valid | [docs/workflows-ci.md](docs/workflows-ci.md) |
 | `web-ci.yml` | any JS/TS surface — pnpm, Biome, tsc, Vitest with coverage | [docs/web-ci.md](docs/web-ci.md) |
 

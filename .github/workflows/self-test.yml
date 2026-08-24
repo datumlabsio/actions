@@ -364,3 +364,81 @@ jobs:
     uses: ./.github/workflows/dlt-pipeline.yml
     with:
       working-directory: tests/fixtures/python-ok
+
+  # security-baseline against fixtures, because a scanner nobody has watched
+  # refuse anything is a scanner you hope works.
+  security-baseline:
+    runs-on: ubuntu-latest
+    env:
+      SG: ${{ github.workspace }}/.sgvenv/bin/semgrep
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install the pinned Semgrep
+        run: |
+          set -euo pipefail
+          v=$(grep '^semgrep=' configs/security-tool-versions.txt | cut -d= -f2)
+          python3 -m venv .sgvenv
+          .sgvenv/bin/pip install --quiet --disable-pip-version-check "semgrep==$v"
+          "$SG" --version
+
+      - name: The vulnerable fixture is refused, and every Datum rule fires
+        working-directory: tests/fixtures/security-bad
+        run: |
+          set -euo pipefail
+          if "$SG" scan --config=semgrep.yml --error --metrics=off \
+               --disable-version-check vulnerable.py > /tmp/out.txt 2>&1; then
+            echo "::error::Semgrep accepted the deliberately vulnerable fixture."
+            cat /tmp/out.txt
+            exit 1
+          fi
+          for rule in datum-subprocess-shell-true datum-bare-except datum-retired-vocabulary; do
+            if ! grep -q "$rule" /tmp/out.txt; then
+              echo "::error::$rule did not fire. A rule that never matches is worse than no rule."
+              cat /tmp/out.txt
+              exit 1
+            fi
+          done
+          echo "Refused, and all three rules fired."
+
+      - name: The clean fixture passes untouched
+        working-directory: tests/fixtures/security-ok
+        run: |
+          set -euo pipefail
+          "$SG" scan --config=semgrep.yml --error --metrics=off \
+            --disable-version-check clean.py
+          echo "Clean fixture passes."
+
+      # The secret is generated at runtime and never committed. This repo is
+      # PUBLIC with push protection on, so a realistic-looking credential in a
+      # fixture would be refused at push time — correctly. Generating it here
+      # tests gitleaks without ever putting one in the history.
+      - name: gitleaks refuses a planted secret
+        run: |
+          set -euo pipefail
+          v=$(grep '^gitleaks=' configs/security-tool-versions.txt | cut -d= -f2)
+          mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/leak"
+          curl -sSL --fail \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/bin" gitleaks
+          "$RUNNER_TEMP/bin/gitleaks" version
+
+          printf 'aws_secret_access_key = "%s"\n' \
+            "$(head -c 30 /dev/urandom | base64 | tr -d '/+=' | head -c 40)" \
+            > "$RUNNER_TEMP/leak/config.txt"
+
+          if "$RUNNER_TEMP/bin/gitleaks" dir "$RUNNER_TEMP/leak" \
+               --no-banner --redact --exit-code 1; then
+            echo "::error::gitleaks accepted a planted credential."
+            exit 1
+          fi
+          echo "Correctly refused."
+
+      - name: gitleaks passes a clean tree
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/clean"
+          echo "nothing to see here" > "$RUNNER_TEMP/clean/notes.txt"
+          "$RUNNER_TEMP/bin/gitleaks" dir "$RUNNER_TEMP/clean" --no-banner --redact --exit-code 1
+          echo "Clean tree passes."
