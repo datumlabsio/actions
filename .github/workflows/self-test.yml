@@ -442,3 +442,38 @@ jobs:
           echo "nothing to see here" > "$RUNNER_TEMP/clean/notes.txt"
           "$RUNNER_TEMP/bin/gitleaks" dir "$RUNNER_TEMP/clean" --no-banner --redact --exit-code 1
           echo "Clean tree passes."
+
+  # container-ci against fixtures. publish stays false — self-test must never
+  # push an image, and a pull request from a fork must never be able to.
+  container-ci:
+    uses: ./.github/workflows/container-ci.yml
+    with:
+      working-directory: tests/fixtures/container-ok
+
+  # And the negative case. hadolint has to refuse the bad Dockerfile, so this
+  # runs it directly rather than through the workflow — a `uses:` job cannot be
+  # continue-on-error, so a job meant to fail would just fail the run.
+  container-ci-blocks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: hadolint refuses the bad Dockerfile
+        run: |
+          set -euo pipefail
+          v=$(grep '^hadolint=' configs/container-tool-versions.txt | cut -d= -f2)
+          curl -sSL --fail -o /tmp/hadolint \
+            "https://github.com/hadolint/hadolint/releases/download/v${v}/hadolint-linux-x86_64"
+          chmod +x /tmp/hadolint
+          if /tmp/hadolint tests/fixtures/container-bad/Dockerfile; then
+            echo "::error::hadolint accepted a Dockerfile using :latest, unpinned packages and a shell-form CMD."
+            exit 1
+          fi
+          echo "Correctly refused."
+
+      - name: And accepts the clean one
+        run: |
+          set -euo pipefail
+          /tmp/hadolint tests/fixtures/container-ok/Dockerfile
+          echo "Clean Dockerfile passes."
