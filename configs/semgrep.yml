@@ -1,0 +1,44 @@
+# datum-config: semgrep-rules v1
+# Vendored from datumlabsio/actions/configs/semgrep.yml. Bump it, do not edit it.
+#
+# Datum-specific rules, run ALONGSIDE the community packs rather than instead of
+# them. The community packs cover the well-known classes — injection, unsafe
+# deserialisation, weak crypto. These cover things only this org would call a
+# problem.
+#
+# A rule here earns its place by having caught something real, or by encoding a
+# rule the specs already state. Inventing rules that sound sensible is how a
+# scanner becomes noise that everybody suppresses.
+rules:
+  - id: datum-retired-vocabulary
+    languages: [python, typescript, javascript]
+    severity: WARNING
+    message: >-
+      RFC-0008 retired this term. Vocabulary is load-bearing (DES conventions):
+      a retired word in an identifier outlives the document that retired it, and
+      the next reader takes it as current. Use the replacement.
+    pattern-regex: \b(BlockManifest|catalog_block|catalogBlock|decision_product|decisionProduct)\b
+
+  - id: datum-bare-except
+    languages: [python]
+    severity: ERROR
+    message: >-
+      A bare `except:` swallows KeyboardInterrupt and SystemExit as well as the
+      error you meant to handle, so a pipeline that should stop keeps running and
+      reports success. Catch the exception you expect.
+    pattern: |
+      try:
+          ...
+      except:
+          ...
+
+  - id: datum-subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: >-
+      `shell=True` with a constructed command is how a filename becomes code
+      execution. Pass a list of arguments instead — subprocess does not need a
+      shell to run a program.
+    patterns:
+      - pattern: subprocess.$FN(..., shell=True, ...)
+      - pattern-not: subprocess.$FN("...", shell=True, ...)

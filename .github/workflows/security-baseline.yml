@@ -1,0 +1,192 @@
+name: security-baseline
+
+# DES §6, the security half. Callers pin a version tag:
+#
+#   jobs:
+#     security:
+#       uses: datumlabsio/actions/.github/workflows/security-baseline.yml@v0.11.0
+#
+# Three things, all open source and all free, because the paid alternatives are
+# priced per repository or per committer and 223 of the org's 228 repos are
+# private:
+#
+#   Semgrep  (LGPL-2.1)  static analysis
+#   gitleaks (MIT)       secret detection
+#   audit                dependency advisories, per ecosystem
+#
+# WHY GITLEAKS AND NOT GITHUB SECRET SCANNING. GitHub's is better — it refuses
+# the push, so the credential never reaches the remote at all. It is also a paid
+# add-on on private repos. gitleaks fails the pull request instead, by which
+# point the secret is already on a branch and must be rotated regardless. That is
+# a real reduction, not a like-for-like swap, and §6 says so rather than
+# pretending otherwise.
+
+on:
+  workflow_call:
+    inputs:
+      semgrep:
+        description: "Static analysis. A finding fails the job."
+        type: boolean
+        default: true
+
+      semgrep-registry-configs:
+        description: >-
+          Space-separated community packs, fetched from the registry. Kept
+          alongside the vendored Datum rules rather than instead of them.
+        type: string
+        default: "p/default p/secrets"
+
+      gitleaks:
+        description: "Secret detection over the commits this pull request adds."
+        type: boolean
+        default: true
+
+      dependency-audit:
+        description: >-
+          Advisories in the dependency tree. Reports rather than fails: the fix
+          is a Renovate bump, and blocking on something the author cannot resolve
+          in their own pull request teaches people to ignore the gate.
+        type: boolean
+        default: true
+
+      working-directory:
+        type: string
+        default: "."
+
+      config-dir:
+        description: "Where the vendored configs live, relative to working-directory."
+        type: string
+        default: "."
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    if: ${{ inputs.semgrep }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      CONFIG_DIR: ${{ inputs.config-dir }}
+      REGISTRY_CONFIGS: ${{ inputs.semgrep-registry-configs }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install the pinned Semgrep
+        run: |
+          set -euo pipefail
+          p="$CONFIG_DIR/security-tool-versions.txt"
+          if [ ! -f "$p" ]; then
+            echo "::error::$p not found. It is vendored in by the scaffold — copy it from datumlabsio/actions/configs/."
+            exit 1
+          fi
+          if ! head -3 "$p" | grep -q '^# datum-config:'; then
+            echo "::error::$p has no '# datum-config:' version stamp. A vendored config is bumped, never hand-written."
+            exit 1
+          fi
+          pipx install "semgrep==$(grep '^semgrep=' "$p" | cut -d= -f2)" >/dev/null
+          semgrep --version
+
+      - name: Scan
+        env:
+          # Off deliberately. --config=auto and metrics both send project
+          # metadata to semgrep.dev to pick rules and count usage. On private
+          # repos that is telemetry nobody agreed to, and it sits badly beside
+          # the no-literal-env-values gate this repo enforces on itself.
+          SEMGREP_SEND_METRICS: "off"
+        run: |
+          set -euo pipefail
+          args=""
+          for c in $REGISTRY_CONFIGS; do args="$args --config=$c"; done
+
+          local_rules="$CONFIG_DIR/semgrep.yml"
+          if [ -f "$local_rules" ]; then
+            args="$args --config=$local_rules"
+          else
+            echo "::notice::$local_rules not vendored yet — running the community packs only."
+            echo "::notice::Copy it from datumlabsio/actions/configs/ to pick up the Datum-specific rules."
+          fi
+
+          # --error makes a finding a failing exit code. Without it Semgrep
+          # prints findings and exits 0, which is a scanner that reports to
+          # nobody.
+          # shellcheck disable=SC2086
+          semgrep scan $args --error --metrics=off --disable-version-check .
+
+  secrets:
+    if: ${{ inputs.gitleaks }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      CONFIG_DIR: ${{ inputs.config-dir }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # gitleaks reads history, so a shallow clone would scan nothing.
+          fetch-depth: 0
+
+      - name: Install the pinned gitleaks
+        run: |
+          set -euo pipefail
+          p="$CONFIG_DIR/security-tool-versions.txt"
+          v=$(grep '^gitleaks=' "$p" | cut -d= -f2)
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSL --fail \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/gitleaks" version
+
+      - name: Scan the commits this pull request adds
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Deliberately scoped to this pull request's commits, not all history.
+          # A first full-history scan on an old repo surfaces every credential
+          # ever committed — all of them already needing rotation, none of them
+          # this author's doing. That is a migration, and it is not the same job
+          # as stopping the next one.
+          if [ -z "${BASE:-}" ] || ! git cat-file -e "$BASE" 2>/dev/null; then
+            echo "::notice::No pull request base available; scanning the working tree instead."
+            gitleaks dir . --no-banner --redact --exit-code 1
+            exit 0
+          fi
+          gitleaks git . --no-banner --redact --exit-code 1 \
+            --log-opts="$BASE..$HEAD"
+
+  dependencies:
+    if: ${{ inputs.dependency-audit }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Advisories in the dependency tree
+        run: |
+          set -euo pipefail
+          found=0
+          if [ -f pnpm-lock.yaml ]; then
+            corepack enable >/dev/null 2>&1 || true
+            pnpm audit --audit-level=high || found=1
+          fi
+          if [ -f pyproject.toml ] || [ -f requirements.txt ]; then
+            pipx install pip-audit >/dev/null
+            pip-audit --strict || found=1
+          fi
+          if [ "$found" = "1" ]; then
+            echo "::warning::Advisories found. The fix is a Renovate bump, so this reports rather than fails."
+            echo "::warning::If one is not something Renovate can raise, it needs a human — say so on the pull request."
+          else
+            echo "No advisories at or above high severity."
+          fi
