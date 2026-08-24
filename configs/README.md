@@ -36,6 +36,7 @@ Style arguments are pull requests against these files. They are not comments on 
 | `tsconfig.base.json` | every `web-app` repo | the repo's `tsconfig.json`, via `extends` |
 | `web-tool-versions.txt` | every `web-app` repo | `web-ci`, and a developer's local run |
 | `no-stale-quarantine.py` | any repo with tests | `python-ci` and `web-ci`, DES §11 |
+| `container-tool-versions.txt` | any repo with a Dockerfile | `container-ci` — hadolint, trivy, syft pins |
 | `security-tool-versions.txt` | every repo | `security-baseline` — Semgrep and gitleaks pins |
 | `semgrep.yml` | every repo | `security-baseline` — Datum rules, alongside the community packs |
 

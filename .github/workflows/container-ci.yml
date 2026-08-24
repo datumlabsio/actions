@@ -1,0 +1,212 @@
+name: container-ci
+
+# DES §6 and §4, the container half. Callers pin a version tag:
+#
+#   jobs:
+#     container:
+#       uses: datumlabsio/actions/.github/workflows/container-ci.yml@v0.12.0
+#       permissions:
+#         contents: read
+#         packages: write
+#
+# lint -> build -> SBOM -> scan -> publish, in that order, because the order IS
+# the control: the scan runs against the image that would be published, and
+# publish is a separate job that cannot start unless the scan job succeeded.
+# Scanning after publishing tells you what you have already shipped.
+#
+# GHCR rather than ECR. Publishing needs no credentials at all — GITHUB_TOKEN is
+# already scoped to the registry — where ECR would put long-lived AWS keys in
+# CI. §4 says CI publishes an artifact and the install pulls it, and the fewer
+# secrets that sit in the publishing half, the more that holds.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        default: "."
+
+      config-dir:
+        description: "Where the vendored configs live, relative to working-directory."
+        type: string
+        default: "."
+
+      dockerfile:
+        type: string
+        default: "Dockerfile"
+
+      image-name:
+        description: >-
+          Image name under ghcr.io/<owner>/. Defaults to the repository name,
+          which is right for a single-image repo and wrong for a monorepo — pass
+          it there.
+        type: string
+        default: ""
+
+      hadolint:
+        description: "Lint the Dockerfile. A finding fails the job."
+        type: boolean
+        default: true
+
+      sbom:
+        description: "Generate an SBOM with syft and keep it as a build artifact."
+        type: boolean
+        default: true
+
+      scan-severity:
+        description: >-
+          Severities Trivy reports. Reporting is not gating — see gate-on below.
+        type: string
+        default: "HIGH,CRITICAL"
+
+      gate-on:
+        description: >-
+          Severities that FAIL the build. Empty means report only, which is where
+          this starts: a base image carries findings nobody has triaged, and
+          gating on day one blocks the first author to touch a Dockerfile for
+          something they did not cause and cannot fix. Set it to CRITICAL once
+          the real number is known.
+        type: string
+        default: ""
+
+      publish:
+        description: >-
+          Push to GHCR. Only ever true on the default branch — a pull request
+          from a fork must not be able to publish.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    if: ${{ inputs.hadolint }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      CONFIG_DIR: ${{ inputs.config-dir }}
+      DOCKERFILE: ${{ inputs.dockerfile }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Lint the Dockerfile
+        run: |
+          set -euo pipefail
+          p="$CONFIG_DIR/container-tool-versions.txt"
+          if [ ! -f "$p" ]; then
+            echo "::error::$p not found. It is vendored in by the scaffold — copy it from datumlabsio/actions/configs/."
+            exit 1
+          fi
+          if ! head -3 "$p" | grep -q '^# datum-config:'; then
+            echo "::error::$p has no '# datum-config:' version stamp. A vendored config is bumped, never hand-written."
+            exit 1
+          fi
+          if [ ! -f "$DOCKERFILE" ]; then
+            echo "::error::$DOCKERFILE not found in $(pwd)."
+            exit 1
+          fi
+          v=$(grep '^hadolint=' "$p" | cut -d= -f2)
+          curl -sSL --fail -o /tmp/hadolint \
+            "https://github.com/hadolint/hadolint/releases/download/v${v}/hadolint-linux-x86_64"
+          chmod +x /tmp/hadolint
+          /tmp/hadolint --version
+          /tmp/hadolint "$DOCKERFILE"
+          echo "Dockerfile is clean."
+
+  build-scan:
+    needs: lint
+    if: ${{ always() && (needs.lint.result == 'success' || needs.lint.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      CONFIG_DIR: ${{ inputs.config-dir }}
+      DOCKERFILE: ${{ inputs.dockerfile }}
+      SEVERITY: ${{ inputs.scan-severity }}
+      GATE_ON: ${{ inputs.gate-on }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install the pinned tools
+        run: |
+          set -euo pipefail
+          p="$CONFIG_DIR/container-tool-versions.txt"
+          get() { grep "^$1=" "$p" | cut -d= -f2; }
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSL --fail "https://github.com/aquasecurity/trivy/releases/download/v$(get trivy)/trivy_$(get trivy)_Linux-64bit.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/bin" trivy
+          curl -sSL --fail "https://github.com/anchore/syft/releases/download/v$(get syft)/syft_$(get syft)_linux_amd64.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/bin" syft
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/trivy" --version | head -1
+          "$RUNNER_TEMP/bin/syft" version | head -1
+
+      # Built locally and NOT pushed. The image the scan runs against has to be
+      # the image that would be published — scanning a rebuild proves nothing
+      # about what ships.
+      - name: Build
+        run: |
+          set -euo pipefail
+          docker build -f "$DOCKERFILE" -t "ci-candidate:$GITHUB_SHA" .
+
+      - name: SBOM
+        if: ${{ inputs.sbom }}
+        run: syft "ci-candidate:$GITHUB_SHA" -o spdx-json > sbom.spdx.json
+
+      - name: Keep the SBOM
+        if: ${{ inputs.sbom }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-${{ github.sha }}
+          path: ${{ inputs.working-directory }}/sbom.spdx.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Scan
+        run: |
+          set -euo pipefail
+          trivy image --severity "$SEVERITY" --no-progress "ci-candidate:$GITHUB_SHA"
+
+          if [ -z "${GATE_ON:-}" ]; then
+            echo "::notice::Reporting only — no severity is gating yet."
+            echo "::notice::Set gate-on once the real number is known. Findings above are real; they are not blocking."
+            exit 0
+          fi
+          echo "Gating on: $GATE_ON"
+          trivy image --severity "$GATE_ON" --exit-code 1 --no-progress "ci-candidate:$GITHUB_SHA"
+
+  publish:
+    needs: build-scan
+    if: ${{ inputs.publish && needs.build-scan.result == 'success' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DOCKERFILE: ${{ inputs.dockerfile }}
+      IMAGE: ${{ inputs.image-name || github.event.repository.name }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # A separate job that `needs` the scan, rather than a step after it. A step
+      # can be reached by a workflow edit that moves it above the scan; a job
+      # dependency cannot be satisfied by a failing scan at all.
+      - name: Publish to GHCR
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${IMAGE}"
+          echo "${{ github.token }}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker build -f "$DOCKERFILE" -t "${ref}:${GITHUB_SHA}" -t "${ref}:latest" .
+          docker push "${ref}:${GITHUB_SHA}"
+          docker push "${ref}:latest"
+          echo "Published ${ref}:${GITHUB_SHA}"
