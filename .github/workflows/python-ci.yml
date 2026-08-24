@@ -55,6 +55,27 @@ on:
         type: boolean
         default: true
 
+      coverage:
+        description: >-
+          Report test coverage. §11 scopes the requirement to application,
+          web-app and dagster-user-code — a dlt-pipeline is exempt — so this is
+          off unless the archetype asks for it.
+        type: boolean
+        default: false
+
+      phase:
+        description: >-
+          DES §11: a draft repo MUST report coverage but MAY fall below the
+          threshold; a repo serving production MUST meet it. Reporting happens
+          either way — only the gate waits. Same phase-in as web-ci.
+        type: string
+        default: "draft"
+
+      coverage-threshold:
+        description: "Percent of coverage required once the repo serves production."
+        type: number
+        default: 80
+
       stale-quarantine:
         description: >-
           DES §11: fail when a disabled test carries no owner and date, or its
@@ -137,8 +158,39 @@ jobs:
 
       - name: Test
         if: inputs.test
+        env:
+          PHASE: ${{ inputs.phase }}
+          THRESHOLD: ${{ inputs.coverage-threshold }}
+          WITH_COVERAGE: ${{ inputs.coverage }}
         run: |
-          uv run --with-requirements "$CONFIG_DIR/tool-versions.txt" -- pytest -q
+          set -euo pipefail
+          if [ "$WITH_COVERAGE" != "true" ]; then
+            uv run --with-requirements "$CONFIG_DIR/tool-versions.txt" -- pytest -q
+            exit 0
+          fi
+
+          # §11: coverage is REPORTED in every phase so the number is visible and
+          # the trend is real. The threshold is enforced only once the repo serves
+          # production. Reporting unconditionally is what stops "we'll add tests
+          # later" from being invisible.
+          uv run --with-requirements "$CONFIG_DIR/tool-versions.txt" \
+            --with pytest-cov -- \
+            pytest -q --cov --cov-report=term --cov-report=json:coverage.json
+
+          if [ ! -f coverage.json ]; then
+            echo "::warning::No coverage.json was written; cannot report a number."
+            exit 0
+          fi
+          pct=$(python3 -c "import json;print(round(json.load(open('coverage.json'))['totals']['percent_covered'],1))")
+          echo "Coverage: ${pct}%"
+
+          if python3 -c "import sys;sys.exit(0 if float('${pct}') < float('${THRESHOLD}') else 1)"; then
+            if [ "$PHASE" = "production" ]; then
+              echo "::error::Coverage ${pct}% is below ${THRESHOLD}% and this repo serves production (DES §11)."
+              exit 1
+            fi
+            echo "::notice::Coverage ${pct}% is below ${THRESHOLD}%. Allowed in draft phase; it blocks once this repo serves production (DES §11)."
+          fi
 
       - name: Pre-commit hooks
         if: inputs.pre-commit

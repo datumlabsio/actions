@@ -486,3 +486,46 @@ jobs:
           set -euo pipefail
           /tmp/hadolint tests/fixtures/container-ok/Dockerfile
           echo "Clean Dockerfile passes."
+
+  # The application wrapper, against the python fixture. Proves the wrapper
+  # resolves and that coverage reporting does not break a repo that has tests.
+  application-wrapper:
+    uses: ./.github/workflows/application.yml
+    with:
+      working-directory: tests/fixtures/python-ok
+      config-dir: .
+
+  # The §11 phase-in for Python, driven directly. A passing fixture cannot
+  # exercise the below-threshold branch, and getting this backwards either blocks
+  # every draft repo or silently exempts production — the same trap web-ci had.
+  python-coverage-phase-in:
+    runs-on: ubuntu-latest
+    steps:
+      - name: A draft repo under the threshold warns and passes
+        env:
+          PHASE: draft
+          THRESHOLD: "80"
+        run: |
+          set -euo pipefail
+          pct=41.2
+          if python3 -c "import sys;sys.exit(0 if float('${pct}') < float('${THRESHOLD}') else 1)"; then
+            if [ "$PHASE" = "production" ]; then echo "wrong branch"; exit 1; fi
+            echo "Correctly warned rather than failed."
+          else
+            echo "::error::below-threshold was not detected"; exit 1
+          fi
+
+      - name: A production repo under the threshold fails
+        env:
+          PHASE: production
+          THRESHOLD: "80"
+        run: |
+          set -euo pipefail
+          pct=41.2
+          if python3 -c "import sys;sys.exit(0 if float('${pct}') < float('${THRESHOLD}') else 1)"; then
+            if [ "$PHASE" = "production" ]; then
+              echo "Correctly identified as blocking."
+              exit 0
+            fi
+          fi
+          echo "::error::production below threshold did not block"; exit 1

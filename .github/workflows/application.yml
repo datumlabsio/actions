@@ -1,0 +1,75 @@
+name: application
+
+# The caller surface for the `application` archetype (DES §8): an installed
+# application or platform component. A repo names its archetype, not the checks
+# it happens to need:
+#
+#   jobs:
+#     ci:
+#       uses: datumlabsio/actions/.github/workflows/application.yml@v0.13.0
+#
+# §8 says an application is containerised and deploys via the install's GitOps.
+# The container half is NOT here on purpose — the generated ci.yml calls
+# container-ci directly as its own job, because container-ci's publish step needs
+# packages: write and a called workflow cannot request more permission than its
+# caller holds. Threading that through a wrapper adds a level for the grant to
+# traverse and a startup failure with no log when it is missed. It has cost an
+# hour twice already (B-41, B-14).
+#
+# §11 scopes the 80% coverage requirement to application, web-app and
+# dagster-user-code, so coverage is ON here — unlike dlt-pipeline, which is
+# exempt.
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        type: string
+        default: "3.12"
+
+      working-directory:
+        type: string
+        default: "."
+
+      config-dir:
+        type: string
+        default: "."
+
+      phase:
+        description: >-
+          §11: a draft repo reports coverage and may fall below the threshold; a
+          repo serving production must meet it.
+        type: string
+        default: "draft"
+
+      coverage-threshold:
+        type: number
+        default: 80
+
+      commit-lint:
+        description: "Validate the pull request title (DES §3)."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    # No `if:` on this job. Guarding a `uses:` job makes it SKIPPABLE, and a
+    # skipped job holding a relative reference inside a cross-repository called
+    # workflow kills the run at startup on a push (B-52). The toggle and the
+    # event check both live inside commit-lint.yml.
+    uses: ./.github/workflows/commit-lint.yml
+    with:
+      enabled: ${{ inputs.commit-lint }}
+
+  application:
+    uses: ./.github/workflows/python-ci.yml
+    with:
+      python-version: ${{ inputs.python-version }}
+      working-directory: ${{ inputs.working-directory }}
+      config-dir: ${{ inputs.config-dir }}
+      coverage: true
+      phase: ${{ inputs.phase }}
+      coverage-threshold: ${{ inputs.coverage-threshold }}
