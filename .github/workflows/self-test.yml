@@ -447,6 +447,15 @@ jobs:
   # push an image, and a pull request from a fork must never be able to.
   container-ci:
     uses: ./.github/workflows/container-ci.yml
+    # packages: write is granted even though publish is false and the publish job
+    # never runs. A called workflow cannot request more permission than its
+    # caller holds, and that is checked at STARTUP — before any `if:` is
+    # evaluated, so a job that will be skipped still has to be grantable. Without
+    # this the whole run dies as startup_failure with no log, which is exactly
+    # how B-41 broke main.
+    permissions:
+      contents: read
+      packages: write
     with:
       working-directory: tests/fixtures/container-ok
 
