@@ -61,14 +61,33 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
+      - name: Are the App credentials present?
+        id: creds
+        env:
+          APP_ID: ${{ secrets.app-id }}
+        run: |
+          set -euo pipefail
+          # An organisation secret scoped to selected repositories arrives here as
+          # an empty string rather than an error. Without this check the run fails
+          # weekly on a token step, in every repo that was never granted the
+          # secret, and the noise trains people to ignore it.
+          if [ -z "${APP_ID:-}" ]; then
+            echo "::notice::No App credentials in this repository, so nothing ran. Grant it the datum-police secrets to switch this on (B-06)."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Mint a token for the run
         id: token
+        if: steps.creds.outputs.present == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.app-id }}
           private-key: ${{ secrets.private-key }}
 
       - name: Check out
+        if: steps.creds.outputs.present == 'true'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
@@ -76,6 +95,7 @@ jobs:
 
       - name: Read the scaffold this repo came from
         id: current
+        if: steps.creds.outputs.present == 'true'
         env:
           ANSWERS: ${{ inputs.answers-file }}
         run: |
