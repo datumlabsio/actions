@@ -195,11 +195,23 @@ jobs:
       - name: Pre-commit hooks
         if: inputs.pre-commit
         run: |
-          if [ ! -f .pre-commit-config.yaml ]; then
-            echo "::error::No .pre-commit-config.yaml. DES §3 requires one, and a CI stage that runs the same hooks."
+          set -euo pipefail
+          # The config lives at the REPOSITORY root, never inside a component
+          # folder — that is where the scaffold puts it and where pre-commit
+          # resolves hooks from. This step runs with `working-directory` set to
+          # the component, so looking for the config here found nothing in every
+          # monorepo and failed a gate no repo could satisfy.
+          #
+          # `pre-commit run --all-files` already walked the whole git repo, so
+          # only the lookup was ever wrong.
+          reqs="$(cd "$CONFIG_DIR" && pwd)/tool-versions.txt"
+          root="$(git rev-parse --show-toplevel)"
+          if [ ! -f "$root/.pre-commit-config.yaml" ]; then
+            echo "::error::No .pre-commit-config.yaml at the repository root. DES §3 requires one, and a CI stage that runs the same hooks."
             exit 1
           fi
-          uv run --with-requirements "$CONFIG_DIR/tool-versions.txt" -- \
+          cd "$root"
+          uv run --with-requirements "$reqs" -- \
             pre-commit run --all-files --show-diff-on-failure
       - name: No stale or unowned quarantines (DES §11)
         if: ${{ inputs.stale-quarantine }}
