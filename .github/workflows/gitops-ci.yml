@@ -260,10 +260,26 @@ jobs:
           # preceding character not to be ':' or a digit keeps those out.
           # `image:` lines are skipped entirely — a registry hostname and a
           # version tag both belong to the image-pinning gate, not this one.
+          # `image:` and `repository:` lines are skipped entirely. A registry
+          # hostname belongs to the image-pinning gate, and a Helm dependency
+          # CANNOT resolve without naming where the chart comes from — a
+          # `repository: https://…` in Chart.yaml is required, not a leak.
+          #
+          # The second filter drops label and annotation KEYS. Every Kubernetes
+          # object carries `app.kubernetes.io/name` and most carry
+          # `pod-security.kubernetes.io/enforce`; those are conventions, not
+          # addresses. The shape `<domain>/<name>:` is what distinguishes a key
+          # from a value — a hostname reference does not have a slash-name after
+          # it.
+          #
+          # kubernetes.io is named explicitly as well: the list already had
+          # k8s.io, which does not match `app.kubernetes.io` at all, so every
+          # standard label slipped straight through.
           hits=$(grep -rInE '(^|[^0-9.:])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9.]|$)|([a-z0-9-]+\.)+(com|io|net|dev|local)' \
                    --include='*.yaml' --include='*.yml' "${present[@]}" \
-                 | grep -vE '^[^:]+:[0-9]+:[[:space:]]*-?[[:space:]]*image:' \
-                 | grep -vE 'datum\.local|127\.0\.0\.1|0\.0\.0\.0|cluster\.local|schema|apiVersion|helm\.sh|fluxcd\.io|k8s\.io|githubusercontent\.com' || true)
+                 | grep -vE '^[^:]+:[0-9]+:[[:space:]]*-?[[:space:]]*(image|repository):' \
+                 | grep -vE '^[^:]+:[0-9]+:[[:space:]]*-?[[:space:]]*[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}/[A-Za-z0-9._-]+:' \
+                 | grep -vE 'datum\.local|127\.0\.0\.1|0\.0\.0\.0|cluster\.local|schema|apiVersion|helm\.sh|fluxcd\.io|kubernetes\.io|k8s\.io|githubusercontent\.com' || true)
           if [ -n "$hits" ]; then
             echo "::error::A hostname or IP appears in a path that must stay reusable across installs."
             echo "           Move it to this install's values."

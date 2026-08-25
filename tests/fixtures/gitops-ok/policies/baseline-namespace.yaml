@@ -1,0 +1,12 @@
+# Standard Kubernetes label keys. Required by convention, present on almost every
+# object, and NOT hostnames — the reusable-paths check flagged all four of these
+# before the kubernetes.io fix.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: baseline
+  labels:
+    app.kubernetes.io/name: baseline
+    app.kubernetes.io/managed-by: flux
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted

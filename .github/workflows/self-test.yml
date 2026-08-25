@@ -549,3 +549,49 @@ jobs:
       # secrets exist, and the one most likely to rot unnoticed.
       app-id: ""
       private-key: ""
+
+  # The reusable-paths check, both directions. It shipped flagging standard
+  # Kubernetes label keys and Helm chart repository URLs — content the scaffold
+  # itself generates — so a repo could fail this before anyone wrote a line.
+  reusable-paths-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Lift the pattern out of gitops-ci, so there is no second copy
+        run: |
+          set -euo pipefail
+          python3 - <<'EX'
+          import pathlib, re, sys
+          src = pathlib.Path(".github/workflows/gitops-ci.yml").read_text()
+          m = re.search(r"hits=\$\((grep -rInE.*?)\|\| true\)", src, re.S)
+          if not m:
+              sys.exit("could not lift the reusable-paths pattern")
+          body = re.sub(r"\"\$\{present\[@\]\}\"", '"$@"', m.group(1))
+          pathlib.Path("/tmp/reusable.sh").write_text("#!/usr/bin/env bash\nset -uo pipefail\n" + body + "|| true\n")
+          EX
+          chmod +x /tmp/reusable.sh
+
+      - name: Kubernetes labels and chart repositories are not findings
+        working-directory: tests/fixtures/gitops-ok
+        run: |
+          set -euo pipefail
+          out=$(/tmp/reusable.sh policies charts)
+          if [ -n "$out" ]; then
+            echo "::error::Flagged content the scaffold itself generates:"
+            echo "$out"
+            exit 1
+          fi
+          echo "Standard label keys and chart repository URLs pass."
+
+      - name: An install hostname is still refused
+        working-directory: tests/fixtures/gitops-install-leak
+        run: |
+          set -euo pipefail
+          out=$(/tmp/reusable.sh platform)
+          if ! echo "$out" | grep -q 'acme-corp'; then
+            echo "::error::The check no longer catches a real install hostname. It has been loosened too far."
+            exit 1
+          fi
+          echo "Correctly refused."
