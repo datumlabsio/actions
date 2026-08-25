@@ -1,4 +1,4 @@
 # Every repo in the org runs CI from this one. A change here reaches the whole
 # fleet on the next version bump, so nothing merges without a code-owner review.
 
-* @datumlabsio/core
+* @datumlabsio/datum-core
