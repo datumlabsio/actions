@@ -1,0 +1,214 @@
+name: scaffold-update
+
+# DES §2 says a gate is fixed once in datumlabsio/actions and every repo inherits
+# it on the next bump. Until this workflow existed that sentence was false: the
+# bump depended on somebody remembering, and on 2026-08-25 four releases reached
+# polaris only because a person ran `copier update` by hand each time.
+#
+# Renovate cannot do this job. Renovate edits version strings; a scaffold bump has
+# to RE-RENDER the files. A pull request that changed `_commit` alone would leave
+# a repo claiming a scaffold version its files do not match — worse than being
+# honestly behind, because the drift becomes invisible.
+#
+# Call it on a schedule from any repo that carries `.copier-answers.yml`:
+#
+#   on:
+#     schedule:
+#       - cron: "0 5 * * 1"
+#     workflow_dispatch:
+#
+#   jobs:
+#     scaffold-update:
+#       uses: datumlabsio/actions/.github/workflows/scaffold-update.yml@vX.Y.Z
+#       secrets:
+#         app-id: ${{ secrets.DATUM_POLICE_APP_ID }}
+#         private-key: ${{ secrets.DATUM_POLICE_PRIVATE_KEY }}
+#
+# It runs as the bot, never as a person (DES §7).
+
+on:
+  workflow_call:
+    inputs:
+      answers-file:
+        description: "Copier's answers file. Its `_commit` and `_src_path` are the whole input."
+        type: string
+        default: ".copier-answers.yml"
+
+      branch:
+        description: >-
+          Branch the update is pushed to. Fixed rather than per-version, so a
+          repo accumulates one open pull request instead of one per release.
+        type: string
+        default: "chore/scaffold-update"
+
+      copier-version:
+        description: "Pinned, like every other tool the standard runs (DES §4)."
+        type: string
+        default: "9.17.2"
+
+    secrets:
+      app-id:
+        description: "The bot's GitHub App id. DES §7: automation is attributable and is not a person."
+        required: true
+      private-key:
+        description: "The bot's private key."
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint a token for the run
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.private-key }}
+
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Read the scaffold this repo came from
+        id: current
+        env:
+          ANSWERS: ${{ inputs.answers-file }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$ANSWERS" ]; then
+            echo "::notice::$ANSWERS not found — this repo was not rendered from a scaffold. Nothing to update."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          commit=$(grep -E '^_commit:' "$ANSWERS" | head -1 | sed 's/^_commit:[[:space:]]*//' | tr -d '"'"'"'')
+          src=$(grep -E '^_src_path:' "$ANSWERS" | head -1 | sed 's/^_src_path:[[:space:]]*//' | tr -d '"'"'"'')
+
+          # `gh:owner/repo` is copier's shorthand for GitHub.
+          repo="${src#gh:}"
+          repo="${repo#https://github.com/}"
+          repo="${repo%.git}"
+
+          if [ -z "$commit" ] || [ -z "$repo" ]; then
+            echo "::error::Could not read _commit and _src_path from $ANSWERS."
+            exit 1
+          fi
+
+          echo "  scaffold: $repo"
+          echo "  current:  $commit"
+          echo "skip=false"      >> "$GITHUB_OUTPUT"
+          echo "repo=$repo"      >> "$GITHUB_OUTPUT"
+          echo "commit=$commit"  >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the latest release
+        id: latest
+        if: steps.current.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ steps.current.outputs.repo }}
+          CURRENT: ${{ steps.current.outputs.commit }}
+        run: |
+          set -euo pipefail
+          tag=$(gh api "repos/$REPO/releases/latest" -q .tag_name 2>/dev/null || true)
+          if [ -z "$tag" ]; then
+            echo "::notice::$REPO has published no release yet. Nothing to update to."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "  latest: $tag"
+          if [ "$tag" = "$CURRENT" ]; then
+            echo "::notice::Already on $tag. Nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true"  >> "$GITHUB_OUTPUT"
+            echo "tag=$tag"      >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install uv
+        if: steps.latest.outputs.changed == 'true'
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      - name: Run copier update
+        id: render
+        if: steps.latest.outputs.changed == 'true'
+        env:
+          TAG: ${{ steps.latest.outputs.tag }}
+          COPIER_VERSION: ${{ inputs.copier-version }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          set -euo pipefail
+
+          # copier update refuses to run on a dirty tree, and it reads the branch
+          # it is on. Start from the default branch every time so the pull request
+          # is a clean diff against main rather than against its own last run.
+          git config user.name  "datum-police[bot]"
+          git config user.email "datum-police[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+
+          uvx --from "copier==$COPIER_VERSION" copier update \
+            --trust --defaults --vcs-ref "$TAG"
+
+          # A conflicting update leaves .rej files. The pull request still opens —
+          # a human resolving a conflict is the point — but it must say so.
+          rejects=$(git status --porcelain | grep -c '\.rej$' || true)
+          echo "rejects=$rejects" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "::notice::$TAG changed nothing in this repo."
+            echo "diff=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "diff=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update the pull request
+        if: steps.render.outputs.diff == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TAG: ${{ steps.latest.outputs.tag }}
+          CURRENT: ${{ steps.current.outputs.commit }}
+          REPO: ${{ steps.current.outputs.repo }}
+          BRANCH: ${{ inputs.branch }}
+          REJECTS: ${{ steps.render.outputs.rejects }}
+        run: |
+          set -euo pipefail
+
+          git add -A
+          git commit -q -m "chore: take scaffold $TAG"
+
+          # Force, because this branch is regenerated from the default branch on
+          # every run rather than appended to.
+          git push -q --force origin "$BRANCH"
+
+          {
+            echo "\`$CURRENT\` → \`$TAG\`, rendered by \`copier update\` rather than"
+            echo "by editing the version string — so the files in this pull request are"
+            echo "the files the scaffold actually produces at $TAG."
+            echo
+            echo "Released at: https://github.com/$REPO/releases/tag/$TAG"
+            echo
+            if [ "$REJECTS" != "0" ]; then
+              echo "> [!WARNING]"
+              echo "> The update conflicted. **$REJECTS \`.rej\` file(s)** are included and"
+              echo "> must be resolved by hand before merging. A conflict means this repo"
+              echo "> edited something the scaffold owns."
+              echo
+            fi
+            echo "Opened by \`scaffold-update\`, which runs weekly. If this sits unmerged"
+            echo "the branch is regenerated on the next run, so the diff always reflects"
+            echo "the current default branch."
+          } > /tmp/pr-body.md
+
+          if gh pr view "$BRANCH" --json number -q .number >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --title "chore: take scaffold $TAG" --body-file /tmp/pr-body.md
+            echo "::notice::Updated the open pull request to $TAG."
+          else
+            gh pr create --head "$BRANCH" \
+              --title "chore: take scaffold $TAG" --body-file /tmp/pr-body.md
+            echo "::notice::Opened a pull request taking $TAG."
+          fi
