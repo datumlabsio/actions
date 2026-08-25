@@ -1,0 +1,118 @@
+name: main-watch-report
+
+# Half of B-54. `main-watch` runs the gates against the default branch on a
+# schedule; this turns the result into something a person actually sees.
+#
+# A failing scheduled run is invisible. Nobody opens the Actions tab of a repo
+# that is not currently on fire, which is the same failure mode as the permanently
+# red push run that was deleted — a signal nobody reads is not a signal.
+#
+# So: an open issue while `main` is broken, closed automatically when it recovers.
+# One issue, reused, rather than one per week.
+#
+# It deliberately does NOT nest a `uses:` job. A cross-repository called workflow
+# that references its stages relatively dies at STARTUP on a non-`pull_request`
+# event, with no job, no step and no log (B-52). A schedule is a non-`pull_request`
+# event, so everything here runs as steps.
+
+on:
+  workflow_call:
+    inputs:
+      failed:
+        description: "'true' when any watched gate failed. Anything else is treated as healthy."
+        type: string
+        required: true
+
+      details:
+        description: "What failed, one per line. Goes into the issue body."
+        type: string
+        default: ""
+
+      title:
+        description: "Issue title. Fixed, because it is how the existing issue is found again."
+        type: string
+        default: "`main` is failing its own gates"
+
+    secrets:
+      app-id:
+        description: "The bot's GitHub App id. DES §7: automation is attributable and is not a person."
+        required: true
+      private-key:
+        description: "The bot's private key."
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint a token for the run
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.private-key }}
+
+      - name: Open, update or close the issue
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          FAILED: ${{ inputs.failed }}
+          DETAILS: ${{ inputs.details }}
+          TITLE: ${{ inputs.title }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # Find the existing issue by exact title. A label would need creating
+          # first and can be deleted by anyone; the title is the stable handle.
+          existing=$(gh issue list --repo "$REPO" --state open --limit 100 \
+            --json number,title \
+            --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")
+
+          if [ "$FAILED" != "true" ]; then
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --repo "$REPO" \
+                --body "\`main\` is green again as of [this run]($RUN_URL). Closing."
+              gh issue close "$existing" --repo "$REPO"
+              echo "::notice::main recovered — closed issue #$existing."
+            else
+              echo "::notice::main is healthy. Nothing to report."
+            fi
+            exit 0
+          fi
+
+          {
+            echo "The scheduled watch found \`main\` failing gates that pass on pull requests."
+            echo
+            echo "This matters because **nothing else looks at \`main\`.** CI runs on pull"
+            echo "requests, so a default branch can rot — a dependency moves, a pinned"
+            echo "action is deleted, a gate is tightened upstream — and the next person to"
+            echo "branch from it inherits a broken starting point."
+            echo
+            echo "**Failed:**"
+            echo
+            if [ -n "$DETAILS" ]; then
+              printf '%s\n' "$DETAILS" | sed 's/^/- /'
+            else
+              echo "- see the run"
+            fi
+            echo
+            echo "Run: $RUN_URL"
+            echo
+            echo "---"
+            echo
+            echo "Opened by \`main-watch\`. It closes itself when \`main\` passes again, so"
+            echo "do not close it by hand — a closed issue over a broken \`main\` reopens next"
+            echo "week and loses the history of how long it was broken."
+          } > /tmp/issue-body.md
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body-file /tmp/issue-body.md
+            echo "::notice::main is still broken — commented on issue #$existing."
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body-file /tmp/issue-body.md
+            echo "::error::main is failing its own gates. Opened an issue."
+          fi
