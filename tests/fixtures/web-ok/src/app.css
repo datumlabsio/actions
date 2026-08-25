@@ -1,0 +1,21 @@
+/* Tailwind CSS 4.0 directives. This fixture exists so `tailwindDirectives` in
+   the vendored biome.json is exercised by a real parse, not just declared —
+   without it every one of these lines is a syntax error. */
+@import "tailwindcss";
+
+@theme {
+  --color-datum: oklch(0.72 0.11 178);
+  --font-display: "Inter", sans-serif;
+}
+
+@custom-variant pointer-fine (@media (pointer: fine));
+
+@utility card {
+  border-radius: 0.5rem;
+  padding: --spacing(4);
+}
+
+.panel {
+  background: var(--color-datum);
+  color: --alpha(var(--color-datum) / 80%);
+}
