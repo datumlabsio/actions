@@ -529,3 +529,23 @@ jobs:
             fi
           fi
           echo "::error::production below threshold did not block"; exit 1
+
+  # The audit runs against this repo and scaffolds on every pull request, in
+  # dry-run. It proves the checks execute and the script parses — it does NOT
+  # assert conformance, because both repos legitimately have findings: neither
+  # was born from a scaffold, and `actions` is the callee rather than a caller.
+  #
+  # Asserting zero findings here would mean either weakening the audit until it
+  # passes, or exempting the repos it lives in. Both are worse than an honest
+  # report.
+  conformance-audit:
+    uses: ./.github/workflows/conformance-audit.yml
+    with:
+      repos: "datumlabsio/actions datumlabsio/scaffolds"
+      dry-run: true
+    secrets:
+      # Empty on purpose, so the missing-credentials branch is the one exercised
+      # on every pull request — the branch a scheduled run takes before the
+      # secrets exist, and the one most likely to rot unnoticed.
+      app-id: ""
+      private-key: ""

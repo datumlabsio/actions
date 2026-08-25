@@ -11,3 +11,7 @@ target/
 dbt_packages/
 logs/
 *.duckdb
+
+# The conformance audit writes its findings here for the issue-filing step.
+# A run artefact, not source.
+conformance-findings.json
