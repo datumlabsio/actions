@@ -1,0 +1,21 @@
+# DES §3: a pre-commit config in the repo, and a CI stage that runs the same
+# hooks. This repo defines the gates, so it runs them on itself.
+#
+# The hook set matches datumlabsio/scaffolds' template/.pre-commit-config.yaml.
+# If one changes, change both — this file is what self-test resolves when it
+# exercises python-ci against the fixtures.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # A Helm chart's templates/ holds GO templates — `{{- if }}`,
+        # `{{- define }}` — which are not YAML and never will be. check-yaml
+        # cannot parse them. The gitops fixture ships real charts, and
+        # `pre-commit run --all-files` walks the whole repo, so this exclusion
+        # is load-bearing here for the same reason the scaffold ships it.
+        exclude: '(^|/)charts/[^/]+/templates/'
+      - id: check-merge-conflict
+      - id: check-added-large-files
