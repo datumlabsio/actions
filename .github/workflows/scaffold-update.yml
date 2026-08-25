@@ -101,9 +101,11 @@ jobs:
 
           echo "  scaffold: $repo"
           echo "  current:  $commit"
-          echo "skip=false"      >> "$GITHUB_OUTPUT"
-          echo "repo=$repo"      >> "$GITHUB_OUTPUT"
-          echo "commit=$commit"  >> "$GITHUB_OUTPUT"
+          {
+            echo "skip=false"
+            echo "repo=$repo"
+            echo "commit=$commit"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Resolve the latest release
         id: latest
@@ -126,8 +128,10 @@ jobs:
             echo "::notice::Already on $tag. Nothing to do."
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
-            echo "changed=true"  >> "$GITHUB_OUTPUT"
-            echo "tag=$tag"      >> "$GITHUB_OUTPUT"
+            {
+              echo "changed=true"
+              echo "tag=$tag"
+            } >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install uv
