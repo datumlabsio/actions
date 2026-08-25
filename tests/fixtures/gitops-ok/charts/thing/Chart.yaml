@@ -1,0 +1,9 @@
+# A Helm dependency cannot resolve without naming where the chart comes from.
+# `repository:` is required, and is not an install-specific hostname.
+apiVersion: v2
+name: thing
+version: 0.1.0
+dependencies:
+  - name: keycloak
+    version: 25.0.0
+    repository: https://codecentric.github.io/helm-charts

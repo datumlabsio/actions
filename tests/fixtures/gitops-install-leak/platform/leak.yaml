@@ -1,0 +1,7 @@
+# A REAL finding: this names one install and must still be refused.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ingress-config
+data:
+  externalHost: warehouse.acme-corp.com
