@@ -233,6 +233,7 @@ jobs:
           if [ ! -f "$script" ]; then
             echo "::notice::$script not vendored yet — skipping the DES §11 quarantine check."
             echo "::notice::Vendor it from datumlabsio/actions/configs/ (or bump your scaffold) to switch this gate on."
+            echo "no-stale-quarantine — not vendored" >> "$RUNNER_TEMP/datum-skipped.txt"
             exit 0
           fi
           if ! head -3 "$script" | grep -q '^# datum-config:'; then
@@ -240,3 +241,52 @@ jobs:
             exit 1
           fi
           python3 "$script" .
+
+      # A gate that skips itself and a gate that passes are indistinguishable from
+      # outside: both green, both exit 0. §11's quarantine check had never run in
+      # polaris while CI reported success the whole time.
+      #
+      # `always()`, because a run that FAILED still has to say what it did — that
+      # is exactly when the question gets asked.
+      - name: What this run actually did
+        if: always()
+        env:
+          WORKDIR: ${{ inputs.working-directory }}
+          REQUESTED: >-
+            biome:${{ inputs.lint }}
+            tsc:${{ inputs.typecheck }}
+            vitest:${{ inputs.test }}
+            build:${{ inputs.build }}
+            no-stale-quarantine:${{ inputs.stale-quarantine }}
+        run: |
+          set -euo pipefail
+          skips="$RUNNER_TEMP/datum-skipped.txt"
+          [ -f "$skips" ] || : > "$skips"
+
+          ran=""; off=""
+          for pair in $REQUESTED; do
+            name="${pair%%:*}"
+            on="${pair##*:}"
+            if [ "$on" != "true" ]; then
+              off="${off}${off:+, }${name}"
+            elif ! grep -q "^${name} " "$skips"; then
+              ran="${ran}${ran:+, }${name}"
+            fi
+          done
+
+          skipped=$(paste -sd';' - < "$skips" | sed 's/;/; /g')
+
+          {
+            echo "### web-ci — \`${WORKDIR:-.}\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Ran | ${ran:-none} |"
+            echo "| **Skipped** | ${skipped:-none} |"
+            echo "| Off by config | ${off:-none} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Loud in the log too, so it is visible without opening the summary tab.
+          if [ -n "$skipped" ]; then
+            echo "::warning::Gates skipped: ${skipped}"
+          fi
