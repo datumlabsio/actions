@@ -165,8 +165,22 @@ jobs:
           TAG: ${{ steps.latest.outputs.tag }}
           COPIER_VERSION: ${{ inputs.copier-version }}
           BRANCH: ${{ inputs.branch }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           set -euo pipefail
+
+          # copier shells out to its own `git clone` for the template. Checkout
+          # authenticates only the repository it checked out — the credential
+          # lives in THIS repo's local config — so a PRIVATE template gets no
+          # credentials at all, and git asks for a username on a machine with no
+          # terminal to answer:
+          #
+          #   fatal: could not read Username for 'https://github.com'
+          #
+          # Rewriting the URL globally hands copier's clone the same App token.
+          git config --global \
+            url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
 
           # copier update refuses to run on a dirty tree, and it reads the branch
           # it is on. Start from the default branch every time so the pull request
