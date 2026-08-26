@@ -85,6 +85,11 @@ jobs:
         with:
           app-id: ${{ secrets.app-id }}
           private-key: ${{ secrets.private-key }}
+          # Without `owner`, the token is scoped to THIS repository only — so a
+          # private template is invisible to it: the release lookup 404s and the
+          # clone has no credentials. The template lives in another repository by
+          # definition, which is the whole job.
+          owner: ${{ github.repository_owner }}
 
       - name: Check out
         if: steps.creds.outputs.present == 'true'
@@ -136,7 +141,13 @@ jobs:
           CURRENT: ${{ steps.current.outputs.commit }}
         run: |
           set -euo pipefail
-          tag=$(gh api "repos/$REPO/releases/latest" -q .tag_name 2>/dev/null || true)
+          # `|| true` here would swallow a 404 and pass its JSON error body on as
+          # though it were a tag — `copier update --vcs-ref '{"message":"Not
+          # Found"}'`. A lookup that fails must stop the run and say why.
+          if ! tag=$(gh api "repos/$REPO/releases/latest" -q .tag_name 2>/dev/null); then
+            echo "::error::Cannot read the releases of $REPO. If it is private, the App must be installed on it and the token scoped with \`owner:\`."
+            exit 1
+          fi
           if [ -z "$tag" ]; then
             echo "::notice::$REPO has published no release yet. Nothing to update to."
             echo "changed=false" >> "$GITHUB_OUTPUT"
