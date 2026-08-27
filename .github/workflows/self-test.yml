@@ -860,3 +860,114 @@ jobs:
             exit 1
           fi
           echo "A flipped proposal passes."
+
+  # B-19, last slice. The two remaining gates nobody had watched refuse.
+  #
+  # dbt YAML coverage is a vendored script, so it is driven directly against
+  # synthesised manifests — one per rule it enforces. Writing those fixtures is
+  # what found the fifth rule: a mart must enforce a contract. A "good" manifest
+  # built from the docstring alone was refused, which is precisely what the
+  # control case exists to catch.
+  #
+  # commit-lint is lifted out of its workflow like the others.
+  remaining-gates-block:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: dbt YAML coverage refuses each violation, and accepts a clean manifest
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/manifests"
+          mkdir -p "$d"
+
+          model='"resource_type":"model","name":"orders","original_file_path":"models/marts/orders.sql","fqn":["p","marts","orders"]'
+          contract='"config":{"contract":{"enforced":true}}'
+          test_node='"test.p.nn":{"resource_type":"test","depends_on":{"nodes":["model.p.orders"]}}'
+          cols_ok='"columns":{"order_id":{"description":"Primary key."}}'
+          patch='"patch_path":"p://models/schema.yml"'
+          desc='"description":"One row per order."'
+
+          printf '{"nodes":{"model.p.orders":{%s,%s,%s,%s,%s},%s}}\n' \
+            "$model" "$contract" "$patch" "$desc" "$cols_ok" "$test_node" > "$d/good.json"
+          printf '{"nodes":{"model.p.orders":{%s,%s,%s,"description":"",%s},%s}}\n' \
+            "$model" "$contract" "$patch" "$cols_ok" "$test_node" > "$d/no-description.json"
+          printf '{"nodes":{"model.p.orders":{%s,%s,%s,%s},%s}}\n' \
+            "$model" "$contract" "$desc" "$cols_ok" "$test_node" > "$d/no-yaml-entry.json"
+          printf '{"nodes":{"model.p.orders":{%s,%s,%s,%s,%s}}}\n' \
+            "$model" "$contract" "$patch" "$desc" "$cols_ok" > "$d/untested.json"
+          printf '{"nodes":{"model.p.orders":{%s,%s,%s,%s,"columns":{"order_id":{"description":""}}},%s}}\n' \
+            "$model" "$contract" "$patch" "$desc" "$test_node" > "$d/undocumented-column.json"
+          printf '{"nodes":{"model.p.orders":{%s,%s,%s,%s},%s}}\n' \
+            "$model" "$patch" "$desc" "$cols_ok" "$test_node" > "$d/no-contract.json"
+
+          # The control first. A gate that refuses everything looks identical to a
+          # working one until somebody tries to merge something legitimate.
+          if ! python3 configs/dbt-yaml-coverage.py --manifest "$d/good.json" --mart-path marts; then
+            echo "::error::A fully documented, tested, contracted mart was refused. The gate over-matches."
+            exit 1
+          fi
+          echo "A clean manifest passes."
+
+          for case in no-description no-yaml-entry untested undocumented-column no-contract; do
+            if python3 configs/dbt-yaml-coverage.py --manifest "$d/$case.json" --mart-path marts; then
+              echo "::error::dbt YAML coverage accepted '$case'. The gate does not block it."
+              exit 1
+            fi
+            echo "  refused: $case"
+          done
+          echo "Every rule in dbt.md §2 was watched refusing."
+
+      - name: commit-lint refuses a title that is not a Conventional Commit
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 - <<'EX'
+          import pathlib, sys, yaml
+
+          doc = yaml.safe_load(pathlib.Path(".github/workflows/commit-lint.yml").read_text())
+          steps = doc["jobs"][next(iter(doc["jobs"]))]["steps"]
+          for step in steps:
+              if step.get("name") == "Title is a Conventional Commit":
+                  body = step["run"]
+                  if "$" + "{{" in body:
+                      sys.exit("commit-lint now uses a workflow expression; it can no longer be lifted")
+                  pathlib.Path("/tmp/cl.sh").write_text("#!/usr/bin/env bash\nset -uo pipefail\n" + body)
+                  print("lifted the title checker")
+                  break
+          else:
+              sys.exit("could not find the title step in commit-lint.yml")
+          EX
+          chmod +x /tmp/cl.sh
+
+          types='feat|fix|docs|chore|refactor|test|perf|build|ci|style|revert'
+
+          # Valid shapes, including a scope and a breaking-change marker.
+          while IFS= read -r title; do
+            [ -n "$title" ] || continue
+            if ! TITLE="$title" TYPES="$types" bash /tmp/cl.sh >/dev/null; then
+              echo "::error::commit-lint refused a valid Conventional Commit: $title"
+              exit 1
+            fi
+          done <<'TITLES'
+          feat: add the thing
+          fix(web-app): stop the crash
+          chore!: drop support for the old shape
+          TITLES
+          echo "Valid titles pass."
+
+          # And the shapes that must not merge.
+          while IFS= read -r title; do
+            [ -n "$title" ] || continue
+            if TITLE="$title" TYPES="$types" bash /tmp/cl.sh >/dev/null 2>&1; then
+              echo "::error::commit-lint accepted a title that is not a Conventional Commit: $title"
+              exit 1
+            fi
+          done <<'TITLES'
+          added a thing
+          Feat: capitalised type
+          feat:no space after the colon
+          wip
+          TITLES
+          echo "Correctly refused."
