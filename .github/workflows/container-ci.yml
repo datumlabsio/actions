@@ -71,8 +71,10 @@ on:
 
       version:
         description: >-
-          The version this image is published as, without a leading `v`. When
-          set, the image carries it as a tag alongside the commit SHA, so a
+          The version this image is published as, exactly as the release cut
+          it — `v0.1.0`, prefix included, so the image tag and the git tag are
+          the same string and neither has to be translated to find the other.
+          When set, the image carries it alongside the commit SHA, so a
           deployment can name what it runs instead of a forty-character hash.
           Empty on a pull request, where nothing is published anyway.
         type: string
