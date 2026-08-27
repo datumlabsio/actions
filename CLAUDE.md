@@ -54,6 +54,21 @@ done; echo "PERMISSIONS CHECKED"
 - **Never let CI hold production credentials.** Deploy is pull-based: CI publishes an artifact, the install pulls it.
 - **Never move the `v1` tag as part of merging a pull request.** Releasing is a separate, deliberate step — see the README.
 - Never add a step that writes to another repo without saying so plainly in the pull request. This repo reaches everything.
+- **A workflow that runs `copier` against a private template MUST hand git a credential first.** copier shells out to its own `git clone`, and `actions/checkout`'s credential is local to the clone it made — so the template clone gets nothing and git asks for a username on a machine with no terminal:
+
+  ```
+  fatal: could not read Username for 'https://github.com'
+  ```
+
+  The fix is a global URL rewrite before the copier call, using whichever token can read the template:
+
+  ```bash
+  git config --global \
+    url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf \
+    "https://github.com/"
+  ```
+
+  This has been rediscovered **four times**. Two consequences worth knowing before writing the fifth: the token must be scoped to reach the *template's* repository, not just this one — `create-github-app-token` scopes to the current repo unless given `owner:` — and **a public repository cannot do this at all**, because a fork's pull request must never be handed a credential that reads a private repo. That is why the fixture-drift check lives in `scaffolds` and not here.
 - Do not restate rules from the DES here. Link to them. Two copies drift and the copy here is the one nobody updates.
 
 ## Docs
