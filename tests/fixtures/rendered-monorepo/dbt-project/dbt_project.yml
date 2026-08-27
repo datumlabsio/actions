@@ -1,0 +1,19 @@
+name: rendered_monorepo
+version: "1.0.0"
+profile: rendered_monorepo
+config-version: 2
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+target-path: "target"
+
+# DPS zones. Raw arrives from dlt or Kafka; staging renames and types; marts
+# carry the contracts everything above reads (blocks/dbt.md §1).
+models:
+  rendered_monorepo:
+    staging:
+      +materialized: view
+      +schema: staging
+    marts:
+      +materialized: table
+      +schema: marts

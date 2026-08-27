@@ -1,0 +1,13 @@
+# datum-config: tool-versions v1
+# Vendored from datumlabsio/actions/configs/tool-versions.txt. Bump it, do not
+# edit it.
+#
+# Every repo runs these exact versions, locally and in CI. A new ruff release
+# cannot break the fleet overnight — it breaks this file's next bump, on a pull
+# request, where somebody can look at it.
+#
+# Locally:  uv run --with-requirements tool-versions.txt -- ruff check .
+ruff==0.16.3
+mypy==2.3.1
+pytest==9.1.1
+pre-commit==4.6.2

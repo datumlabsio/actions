@@ -1,0 +1,12 @@
+# Git writes LF into every working tree, whatever `core.autocrlf` is set to
+# locally.
+#
+# The template already declares `end_of_line = lf` in .editorconfig, but that
+# binds editors — it has no authority over what git puts on disk. On Windows,
+# `core.autocrlf=true` is the default, so without this file a checkout arrives
+# CRLF, `biome ci` fails on the invisible line terminators, and CI never sees
+# it: GitHub runners are Linux and always check out LF.
+#
+# `text=auto` leaves genuinely binary files alone; only files git detects as
+# text are normalised.
+* text=auto eol=lf

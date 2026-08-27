@@ -1,0 +1,13 @@
+# datum-config: gitops-tool-versions v1
+# Vendored from datumlabsio/actions/configs/gitops-tool-versions.txt. Bump it,
+# do not edit it.
+#
+# Pinned exactly so a new kustomize or kubeconform release cannot break every
+# install's CI overnight — it breaks this file's next bump, on a pull request.
+#
+# Not a pip requirements file: these are binaries. The workflow reads the values.
+kustomize=v5.8.1
+kubeconform=v0.8.0
+helm=v4.2.4
+flux=v2.9.4
+yamllint=1.38.0

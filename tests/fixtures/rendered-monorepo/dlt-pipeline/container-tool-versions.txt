@@ -1,0 +1,9 @@
+# datum-config: container-tool-versions v1
+# Vendored from datumlabsio/actions/configs/container-tool-versions.txt. Bump it,
+# do not edit it.
+#
+# Pinned so a new release cannot change what CI accepts overnight. Renovate
+# raises these; see datumlabsio/.github/docs/renovate.md.
+hadolint=2.15.1
+trivy=0.74.0
+syft=1.51.0

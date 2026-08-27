@@ -1,0 +1,10 @@
+# Pod Security admission applied at the namespace level. Restricted is the
+# default; a namespace needing more says so explicitly and explains why.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-baseline
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

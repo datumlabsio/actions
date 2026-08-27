@@ -980,3 +980,38 @@ jobs:
           wip
           TITLES
           echo "Correctly refused."
+
+  # B-57. Every fixture above was written by hand to satisfy the gate it tests,
+  # which is why five bugs shipped this week: the fixture avoided the failing
+  # case by accident, and nobody noticed until somebody's real repo hit it.
+  #
+  # `tests/fixtures/rendered-monorepo/` is not hand-written. It is `copier copy`
+  # output from datumlabsio/scaffolds, committed as-is. It carries the two shapes
+  # the hand-written fixtures never had:
+  #
+  #   - `.pre-commit-config.yaml` at the ROOT, with the component in a subfolder.
+  #     python-ci looked for it beside the component and failed every monorepo.
+  #   - TWO Dockerfiles. The container job picked one by priority and silently
+  #     stopped building the other.
+  #
+  # Neither bug was findable by reading. Both are structural, and both are here.
+  python-ci-rendered:
+    uses: ./.github/workflows/python-ci.yml
+    with:
+      working-directory: tests/fixtures/rendered-monorepo/dlt-pipeline
+      # Deliberately left on. The scaffold does not vendor
+      # no-stale-quarantine.py, so this gate skips — and B-62's run summary now
+      # says so rather than reporting a silent pass. That is the §11 hole, and
+      # it is visible here on every run instead of being found by accident.
+      stale-quarantine: true
+
+  # The staleness guard does NOT live here, and the reason is structural.
+  #
+  # Re-rendering means cloning datumlabsio/scaffolds, which is PRIVATE. This
+  # repository is PUBLIC and self-test deliberately carries no secrets — a fork's
+  # pull request must never be handed a credential that reads a private repo.
+  #
+  # So the check belongs in `scaffolds`, which already renders its own output and
+  # can read this fixture over the public raw URL. Inverting it also puts the
+  # failure where the change was made, rather than failing this repo's CI for
+  # something somebody did somewhere else. Tracked separately.

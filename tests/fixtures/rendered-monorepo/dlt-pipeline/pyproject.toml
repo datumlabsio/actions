@@ -1,0 +1,20 @@
+[project]
+name = "rendered-monorepo"
+version = "0.1.0"
+description = "A real scaffold render, used as a fixture"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fixture_pipeline"]
+
+# Path-shaped settings live here, in the repo. The vendored ruff.toml and
+# mypy.ini carry rules only, because they sit at a different depth in every
+# repo and those tools resolve paths against the config's own location.
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

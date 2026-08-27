@@ -1,0 +1,6 @@
+# One directory per installed application, each a tile in my-apps (DPS).
+# An application joins the platform through its ApplicationManifest; what
+# lives here is how it gets deployed.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources: []

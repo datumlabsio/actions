@@ -1,0 +1,26 @@
+version: 2
+
+models:
+  - name: stg_example
+    description: >-
+      One row per example event, straight from raw with nothing
+      dropped. Staging renames and types only — no business logic
+      (blocks/dbt.md §1).
+    columns:
+      - name: event_id
+        description: Primary key of the event.
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: The customer this event belongs to.
+        data_tests:
+          - not_null
+      - name: status
+        description: Lifecycle state as the source system reports it.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["completed", "returned"]
+      - name: amount
+        description: Event value in the source currency.
