@@ -1,0 +1,105 @@
+name: notify
+
+# One place that knows what a Slack message looks like (B-61).
+#
+# Every alert goes through here. A message shape defined in five callers drifts
+# into five shapes, and the one nobody updated is the one that matters at 3am.
+#
+# What belongs in this channel: things that CANNOT be blocked, and therefore
+# cannot be caught by a gate. A pull request failing CI is already visible on the
+# pull request. A ruleset being removed is not visible anywhere.
+#
+# The bar is deliberately high. Every alerting channel dies of noise, and the
+# acceptance criterion for this one is SILENCE — it should be quiet for weeks.
+
+on:
+  workflow_call:
+    inputs:
+      summary:
+        description: "One line. This is what somebody reads on a phone."
+        type: string
+        required: true
+
+      detail:
+        description: "Optional second line — what to do, or what to look at."
+        type: string
+        default: ""
+
+      url:
+        description: "Where to go. Omitted rather than faked when there is nowhere useful."
+        type: string
+        default: ""
+
+      severity:
+        description: >-
+          `warn` or `critical`. There is no `info`, deliberately: if it is
+          informational it does not belong in an alert channel.
+        type: string
+        default: warn
+
+    secrets:
+      webhook:
+        description: "Slack incoming webhook. Absent means this repo does not alert."
+        required: false
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post it
+        env:
+          WEBHOOK: ${{ secrets.webhook }}
+          SUMMARY: ${{ inputs.summary }}
+          DETAIL: ${{ inputs.detail }}
+          URL: ${{ inputs.url }}
+          SEVERITY: ${{ inputs.severity }}
+        run: |
+          set -euo pipefail
+
+          # A repository without the webhook is not a failure. It means alerting
+          # was never switched on here, and failing would turn that into a red
+          # run every week that nobody can act on.
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "::notice::No Slack webhook in this repository, so nothing was sent."
+            echo "::notice::Grant it the SLACK_ALERTS_WEBHOOK secret to switch alerting on."
+            exit 0
+          fi
+
+          case "$SEVERITY" in
+            critical) mark=":rotating_light:" ;;
+            warn)     mark=":warning:" ;;
+            *)
+              echo "::error::severity must be 'warn' or 'critical', got '$SEVERITY'."
+              exit 1
+              ;;
+          esac
+
+          # Built with jq rather than string interpolation: a summary containing a
+          # quote or a newline would otherwise produce invalid JSON, and the alert
+          # that fails to send is the one about something being wrong.
+          jq -n \
+            --arg mark "$mark" \
+            --arg summary "$SUMMARY" \
+            --arg detail "$DETAIL" \
+            --arg url "$URL" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            '{
+               text: ($mark + " " + $summary),
+               blocks: (
+                 [ { type: "section",
+                     text: { type: "mrkdwn", text: ($mark + " *" + $summary + "*") } } ]
+                 + (if $detail == "" then [] else
+                     [ { type: "section", text: { type: "mrkdwn", text: $detail } } ] end)
+                 + [ { type: "context",
+                       elements: [ { type: "mrkdwn",
+                                     text: ($repo + (if $url == "" then "" else " · <" + $url + "|open>" end)) } ] } ]
+               )
+             }' > "$RUNNER_TEMP/payload.json"
+
+          # --fail so a rejected webhook is a failed step. A silent 400 would mean
+          # believing this channel works when it does not.
+          curl -sS --fail -X POST -H 'Content-Type: application/json' \
+            --data @"$RUNNER_TEMP/payload.json" "$WEBHOOK" > /dev/null
+          echo "Sent: $SUMMARY"
