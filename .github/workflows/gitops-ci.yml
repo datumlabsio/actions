@@ -145,6 +145,7 @@ jobs:
                    | grep -vE '(^|/)charts/[^/]+/templates/' || true)
           if [ -z "$files" ]; then
             echo "::notice::No YAML outside Helm chart templates. Nothing for yamllint to check."
+            echo "yamllint — no YAML outside chart templates" >> "$RUNNER_TEMP/datum-skipped.txt"
             exit 0
           fi
           echo "$files" | xargs yamllint -c "$CONFIG_DIR/.yamllint"
@@ -162,7 +163,10 @@ jobs:
               helm lint "$(dirname "$chart")"
             done < <(find "$base" -name Chart.yaml)
           done
-          [ "$found" -eq 1 ] || echo "::notice::No charts found under ${{ inputs.chart-paths }}; nothing to lint."
+          if [ "$found" -ne 1 ]; then
+            echo "::notice::No charts found under ${{ inputs.chart-paths }}; nothing to lint."
+            echo "helm-lint — no charts under ${{ inputs.chart-paths }}" >> "$RUNNER_TEMP/datum-skipped.txt"
+          fi
 
       # kustomize build renders offline, so every overlay is validated without a
       # cluster. kubeconform then checks the result against real API schemas —
@@ -269,6 +273,7 @@ jobs:
           done
           if [ "${#present[@]}" -eq 0 ]; then
             echo "::notice::None of ${{ inputs.generic-paths }} exist; nothing to check."
+            echo "reusable-paths — none of ${{ inputs.generic-paths }} exist" >> "$RUNNER_TEMP/datum-skipped.txt"
             exit 0
           fi
           # An IP must be a standalone token: a four-part image tag like
@@ -312,3 +317,57 @@ jobs:
             exit 1
           fi
           echo "Reusable paths are install-agnostic."
+
+      # A gate that skips itself and a gate that passes are indistinguishable from
+      # outside: both green, both exit 0. §11's quarantine check had never run in
+      # polaris while CI reported success the whole time.
+      #
+      # This workflow has three ways to skip, and all three are "nothing to check"
+      # rather than "config missing" — which is usually correct, and is exactly
+      # why it needs saying out loud. A gitops repo whose charts moved would
+      # report the same silence as one that never had any.
+      #
+      # `always()`, because a run that FAILED still has to say what it did.
+      - name: What this run actually did
+        if: always()
+        env:
+          ROOT: ${{ inputs.root }}
+          REQUESTED: >-
+            yamllint:${{ inputs.yamllint }}
+            helm-lint:${{ inputs.chart-paths != '' }}
+            kubeconform:${{ inputs.build }}
+            image-pinning:${{ inputs.image-pinning }}
+            plaintext-secrets:${{ inputs.plaintext-secrets }}
+            reusable-paths:${{ inputs.generic-paths != '' }}
+        run: |
+          set -euo pipefail
+          skips="$RUNNER_TEMP/datum-skipped.txt"
+          [ -f "$skips" ] || : > "$skips"
+
+          ran=""; off=""
+          for pair in $REQUESTED; do
+            name="${pair%%:*}"
+            on="${pair##*:}"
+            if [ "$on" != "true" ]; then
+              off="${off}${off:+, }${name}"
+            elif ! grep -q "^${name} " "$skips"; then
+              ran="${ran}${ran:+, }${name}"
+            fi
+          done
+
+          skipped=$(paste -sd';' - < "$skips" | sed 's/;/; /g')
+
+          {
+            echo "### gitops-ci — \`${ROOT:-.}\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Ran | ${ran:-none} |"
+            echo "| **Skipped** | ${skipped:-none} |"
+            echo "| Off by config | ${off:-none} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Loud in the log too, so it is visible without opening the summary tab.
+          if [ -n "$skipped" ]; then
+            echo "::warning::Gates skipped: ${skipped}"
+          fi
