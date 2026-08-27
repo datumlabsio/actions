@@ -595,3 +595,127 @@ jobs:
             exit 1
           fi
           echo "Correctly refused."
+
+  # B-19. Two gitops gates had never been watched refusing anything: the image
+  # pinning check and the plaintext-secret check. Both are hand-written greps,
+  # which is exactly the kind that stops matching without anyone noticing — a
+  # regex that silently matches nothing is indistinguishable from a clean repo.
+  #
+  # Both directions are asserted. A gate tested only against broken input looks
+  # like it works even when it refuses everything, so the control case — a
+  # correct fixture that must PASS — is the half that catches over-matching.
+  #
+  # The bad fixtures are written at run time rather than committed. The same
+  # reasoning as the gitleaks test above: a repository that scans itself should
+  # not carry secret-shaped content in its own history.
+  gitops-gates-block:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Lift both checkers out of gitops-ci, so there is no second copy
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 - <<'EX'
+          import pathlib, sys, yaml
+
+          doc = yaml.safe_load(pathlib.Path(".github/workflows/gitops-ci.yml").read_text())
+          steps = doc["jobs"][next(iter(doc["jobs"]))]["steps"]
+          wanted = {"Images are pinned": "/tmp/pin.sh", "No plaintext secrets": "/tmp/sec.sh"}
+          found = {}
+          for step in steps:
+              target = wanted.get(step.get("name"))
+              if target:
+                  body = step["run"]
+                  # Built in two pieces so this file never contains the literal
+                  # expression opener, which GitHub would try to evaluate here.
+                  if "$" + "{{" in body:
+                      sys.exit(f"{step['name']} now uses a workflow expression; it can no longer be lifted verbatim")
+                  pathlib.Path(target).write_text("#!/usr/bin/env bash\n" + body)
+                  found[step["name"]] = target
+          missing = set(wanted) - set(found)
+          if missing:
+              sys.exit(f"could not find these steps in gitops-ci.yml: {sorted(missing)}")
+          print(f"lifted {len(found)} checkers")
+          EX
+          chmod +x /tmp/pin.sh /tmp/sec.sh
+
+      - name: Write the fixtures
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP"/{ok,unpinned,plaintext}
+
+          cat > "$RUNNER_TEMP/ok/deployment.yaml" <<'EOF'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: pinned
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: app
+                    image: ghcr.io/datumlabsio/app:1.4.2
+          EOF
+
+          cat > "$RUNNER_TEMP/unpinned/deployment.yaml" <<'EOF'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: floating
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: app
+                    image: nginx:latest
+                  - name: sidecar
+                    image: busybox
+          EOF
+
+          cat > "$RUNNER_TEMP/plaintext/secret.yaml" <<'EOF'
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: inline
+          type: Opaque
+          stringData:
+            connection: postgres://user@host/db
+          EOF
+
+      - name: The control passes both gates
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/ok"
+          if ! bash /tmp/pin.sh; then
+            echo "::error::The image-pinning gate rejected a correctly pinned image. It over-matches."
+            exit 1
+          fi
+          if ! bash /tmp/sec.sh; then
+            echo "::error::The plaintext-secret gate rejected a manifest with no Secret in it. It over-matches."
+            exit 1
+          fi
+          echo "A correct manifest passes both."
+
+      - name: An unpinned image is refused
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/unpinned"
+          if bash /tmp/pin.sh; then
+            echo "::error:::latest and an untagged image were both accepted."
+            echo "::error::The gate does not block, which is worse than not having it."
+            exit 1
+          fi
+          echo "Correctly refused."
+
+      - name: A Secret with inline data is refused
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/plaintext"
+          if bash /tmp/sec.sh; then
+            echo "::error::A Secret carrying stringData was accepted. DES §6 has no exceptions."
+            exit 1
+          fi
+          echo "Correctly refused."
