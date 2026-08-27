@@ -76,8 +76,19 @@ SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 # to learn nothing is wrong.
 SELF = Path(__file__).name
 
-SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "build",
-             ".next", "coverage", "__pycache__", ".mypy_cache", ".ruff_cache"}
+SKIP_DIRS = {
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".next",
+    "coverage",
+    "__pycache__",
+    ".mypy_cache",
+    ".ruff_cache",
+}
 
 WINDOW = 2  # lines either side an annotation may sit on
 
@@ -90,11 +101,7 @@ def files(roots: list[str]):
                 yield p
             continue
         for f in p.rglob("*"):
-            if (
-                f.suffix in SUFFIXES
-                and f.name != SELF
-                and not (set(f.parts) & SKIP_DIRS)
-            ):
+            if f.suffix in SUFFIXES and f.name != SELF and not (set(f.parts) & SKIP_DIRS):
                 yield f
 
 
@@ -155,7 +162,9 @@ def main(argv: list[str]) -> int:
         )
         return 1
 
-    print(f"No stale or unowned quarantines. {found} disabled test(s) checked, all owned and in date.")
+    print(
+        f"No stale or unowned quarantines. {found} disabled test(s) checked, all owned and in date."
+    )
     return 0
 
 
