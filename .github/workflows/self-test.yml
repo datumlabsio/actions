@@ -719,3 +719,144 @@ jobs:
             exit 1
           fi
           echo "Correctly refused."
+
+  # B-19, second slice. Four docs gates had never been watched refusing anything.
+  #
+  # `proposal-status` is the one that matters most: it catches a proposal merged
+  # while still `Status: Draft`, which was missed three times by hand before this
+  # gate existed. It is also the gate that skips itself when there is no base
+  # commit, so it has two ways to quietly do nothing.
+  #
+  # Every gate is asserted in BOTH directions. A gate tested only against broken
+  # input looks like it works even when it refuses everything — the control case
+  # is the half that catches over-matching, and the vocabulary allowlist is
+  # exactly where that could bite.
+  docs-gates-block:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Lift the four checkers out of docs-ci, so there is no second copy
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 - <<'EX'
+          import pathlib, re, sys, yaml
+
+          doc = yaml.safe_load(pathlib.Path(".github/workflows/docs-ci.yml").read_text())
+          steps = doc["jobs"][next(iter(doc["jobs"]))]["steps"]
+          targets = {
+              "No conflict markers": "/tmp/conflict.sh",
+              "No placeholder rot": "/tmp/placeholder.sh",
+              "No retired vocabulary": "/tmp/vocab.sh",
+              "Proposal status matches what shipped": "/tmp/status.sh",
+          }
+          found = {}
+          for step in steps:
+              target = targets.get(step.get("name"))
+              if not target:
+                  continue
+              body = step["run"]
+              # The vocabulary step interpolates its scan paths; take them as
+              # positional arguments instead so the body can run standalone.
+              body = re.sub(r"\$\{\{\s*inputs\.vocabulary-scan-paths\s*\}\}", '"$@"', body)
+              if "$" + "{{" in body:
+                  sys.exit(f"{step['name']} uses a workflow expression that cannot be lifted")
+              pathlib.Path(target).write_text("#!/usr/bin/env bash\nset -uo pipefail\n" + body)
+              found[step["name"]] = target
+          missing = set(targets) - set(found)
+          if missing:
+              sys.exit(f"could not find these steps in docs-ci.yml: {sorted(missing)}")
+          print(f"lifted {len(found)} checkers")
+          EX
+          chmod +x /tmp/conflict.sh /tmp/placeholder.sh /tmp/vocab.sh /tmp/status.sh
+
+      - name: Conflict markers — clean passes, markers are refused
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/clean" && printf 'nothing wrong here\n' > "$RUNNER_TEMP/clean/a.md"
+          if ! (cd "$RUNNER_TEMP/clean" && bash /tmp/conflict.sh); then
+            echo "::error::The conflict-marker gate rejected a clean file. It over-matches."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/dirty"
+          printf '<<<<<<< HEAD\nmine\n>>>>>>> theirs\n' > "$RUNNER_TEMP/dirty/a.md"
+          if (cd "$RUNNER_TEMP/dirty" && bash /tmp/conflict.sh); then
+            echo "::error::Conflict markers were accepted in a merged file."
+            exit 1
+          fi
+          echo "Correctly refused."
+
+      - name: Placeholder rot — clean passes, a TODO is refused
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/p-ok/standards" && printf 'the spec says what it does\n' > "$RUNNER_TEMP/p-ok/standards/a.md"
+          if ! (cd "$RUNNER_TEMP/p-ok" && PATHS=standards bash /tmp/placeholder.sh); then
+            echo "::error::The placeholder gate rejected a file with no placeholder in it. It over-matches."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/p-bad/standards" && printf 'TODO: decide this later\n' > "$RUNNER_TEMP/p-bad/standards/a.md"
+          if (cd "$RUNNER_TEMP/p-bad" && PATHS=standards bash /tmp/placeholder.sh); then
+            echo "::error::A TODO was accepted under standards/. The specs are the present tense."
+            exit 1
+          fi
+          echo "Correctly refused."
+
+      - name: Retired vocabulary — clean passes, a retired term is refused, the allowlist still works
+        env:
+          DENYLIST: 'catalog block|BlockManifest|decision product'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v-ok/standards" && printf 'An application has a my-apps tile.\n' > "$RUNNER_TEMP/v-ok/standards/a.md"
+          if ! (cd "$RUNNER_TEMP/v-ok" && ALLOW='' bash /tmp/vocab.sh standards); then
+            echo "::error::The vocabulary gate rejected current vocabulary. It over-matches."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/v-bad/standards" && printf 'Register a catalog block.\n' > "$RUNNER_TEMP/v-bad/standards/a.md"
+          if (cd "$RUNNER_TEMP/v-bad" && ALLOW='' bash /tmp/vocab.sh standards); then
+            echo "::error::A retired RFC-0008 term was accepted outside the allowlist."
+            exit 1
+          fi
+          # The historical paths accepted RFCs link to must stay exempt, or this
+          # gate starts failing on files nobody is allowed to rename.
+          mkdir -p "$RUNNER_TEMP/v-allow/standards" && printf 'A catalog block, historical.\n' > "$RUNNER_TEMP/v-allow/standards/architecture.md"
+          if ! (cd "$RUNNER_TEMP/v-allow" && ALLOW='architecture\.md' bash /tmp/vocab.sh standards); then
+            echo "::error::The allowlist no longer exempts a historical path."
+            exit 1
+          fi
+          echo "Correctly refused, and the allowlist still holds."
+
+      - name: Proposal status — a Draft shipped alongside a spec change is refused
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/statusrepo"
+          mkdir -p "$repo/rfcs" "$repo/standards"
+          cd "$repo"
+          git init -q
+          git config user.email selftest@datumlabs.io
+          git config user.name self-test
+          printf 'the spec\n' > standards/README.md
+          printf '# Existing\n- **Status:** Accepted\n' > rfcs/0001-existing.md
+          git add -A && git commit -qm base
+          base=$(git rev-parse HEAD)
+
+          # A proposal and a spec change in the same pull request, still Draft.
+          printf '# New\n- **Status:** Draft\n' > rfcs/0099-new.md
+          printf 'changed\n' >> standards/README.md
+          git add -A && git commit -qm "propose and ship together"
+          if BASE="$base" RFC_DIR=rfcs SPEC_DIR=standards bash /tmp/status.sh; then
+            echo "::error::A proposal left at Status: Draft shipped alongside a spec change."
+            echo "::error::This is the miss that happened three times by hand; the gate does not block it."
+            exit 1
+          fi
+          echo "Correctly refused."
+
+          # Control: the same pull request with the status flipped must pass.
+          printf '# New\n- **Status:** Accepted\n' > rfcs/0099-new.md
+          git add -A && git commit -qm "flip on the merging pull request"
+          if ! BASE="$base" RFC_DIR=rfcs SPEC_DIR=standards bash /tmp/status.sh; then
+            echo "::error::The gate rejected a proposal that WAS flipped to Accepted. It over-matches."
+            exit 1
+          fi
+          echo "A flipped proposal passes."
