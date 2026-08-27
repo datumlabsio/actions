@@ -861,6 +861,15 @@ jobs:
           fi
           echo "A flipped proposal passes."
 
+          # And the case that used to pass silently. A base commit that is not in
+          # the checkout means the gate cannot see what changed; it must say so
+          # rather than report success it did not earn.
+          if BASE=0000000000000000000000000000000000000000 RFC_DIR=rfcs SPEC_DIR=standards bash /tmp/status.sh; then
+            echo "::error::A missing base commit was treated as a pass. The gate reported success without checking anything."
+            exit 1
+          fi
+          echo "A missing base commit fails loudly."
+
   # B-19, last slice. The two remaining gates nobody had watched refuse.
   #
   # dbt YAML coverage is a vendored script, so it is driven directly against
