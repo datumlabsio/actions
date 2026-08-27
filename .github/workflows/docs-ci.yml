@@ -189,6 +189,7 @@ jobs:
         run: |
           if ! git cat-file -e "$BASE" 2>/dev/null; then
             echo "::notice::Base commit not available; skipping."
+            echo "proposal-status — no base commit to diff against" >> "$RUNNER_TEMP/datum-skipped.txt"
             exit 0
           fi
 
@@ -227,3 +228,52 @@ jobs:
             exit 1
           fi
           echo "Every changed proposal has a settled status."
+
+      # A gate that skips itself and a gate that passes are indistinguishable from
+      # outside: both green, both exit 0. §11's quarantine check had never run in
+      # polaris while CI reported success the whole time.
+      #
+      # `always()`, because a run that FAILED still has to say what it did — that
+      # is exactly when the question gets asked.
+      - name: What this run actually did
+        if: always()
+        env:
+          WORKDIR: "."
+          REQUESTED: >-
+            conflict-markers:true
+            links:${{ inputs.link-check }}
+            placeholder-rot:true
+            retired-vocabulary:true
+            proposal-status:true
+        run: |
+          set -euo pipefail
+          skips="$RUNNER_TEMP/datum-skipped.txt"
+          [ -f "$skips" ] || : > "$skips"
+
+          ran=""; off=""
+          for pair in $REQUESTED; do
+            name="${pair%:*}"
+            on="${pair##*:}"
+            if [ "$on" != "true" ]; then
+              off="${off}${off:+, }${name}"
+            elif ! grep -q "^${name} " "$skips"; then
+              ran="${ran}${ran:+, }${name}"
+            fi
+          done
+
+          skipped=$(paste -sd';' - < "$skips" | sed 's/;/; /g')
+
+          {
+            echo "### docs-ci — \`${WORKDIR:-.}\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Ran | ${ran:-none} |"
+            echo "| **Skipped** | ${skipped:-none} |"
+            echo "| Off by config | ${off:-none} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Loud in the log too, so it is visible without opening the summary tab.
+          if [ -n "$skipped" ]; then
+            echo "::warning::Gates skipped: ${skipped}"
+          fi
