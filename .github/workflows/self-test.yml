@@ -980,3 +980,69 @@ jobs:
           wip
           TITLES
           echo "Correctly refused."
+
+  # B-57. Every fixture above was written by hand to satisfy the gate it tests,
+  # which is why five bugs shipped this week: the fixture avoided the failing
+  # case by accident, and nobody noticed until somebody's real repo hit it.
+  #
+  # `tests/fixtures/rendered-monorepo/` is not hand-written. It is `copier copy`
+  # output from datumlabsio/scaffolds, committed as-is. It carries the two shapes
+  # the hand-written fixtures never had:
+  #
+  #   - `.pre-commit-config.yaml` at the ROOT, with the component in a subfolder.
+  #     python-ci looked for it beside the component and failed every monorepo.
+  #   - TWO Dockerfiles. The container job picked one by priority and silently
+  #     stopped building the other.
+  #
+  # Neither bug was findable by reading. Both are structural, and both are here.
+  python-ci-rendered:
+    uses: ./.github/workflows/python-ci.yml
+    with:
+      working-directory: tests/fixtures/rendered-monorepo/dlt-pipeline
+      # Deliberately left on. The scaffold does not vendor
+      # no-stale-quarantine.py, so this gate skips — and B-62's run summary now
+      # says so rather than reporting a silent pass. That is the §11 hole, and
+      # it is visible here on every run instead of being found by accident.
+      stale-quarantine: true
+
+  # A committed render is a real render exactly once. Without this it becomes
+  # another hand-maintained fixture within a month, which is the thing B-57
+  # exists to stop.
+  rendered-fixture-is-current:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      - name: Re-render from scaffolds and compare
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/rerender"
+          uvx --from copier copier copy --trust --quiet --defaults --vcs-ref main \
+            -d archetype=monorepo \
+            -d repo_name=rendered-monorepo \
+            -d repo_description="A real scaffold render, used as a fixture" \
+            -d owning_team=platform \
+            -d folders='["gitops","web-app","dbt-project","dlt-pipeline"]' \
+            -d framework=next \
+            -d warehouse=clickhouse \
+            -d source_name=fixture \
+            gh:datumlabsio/scaffolds "$out"
+
+          # The fixture omits the render's own .github/workflows — pushing those
+          # through the API needs a scope this repo's automation does not carry,
+          # and no gate under test reads them.
+          rm -rf "$out/.github/workflows"
+
+          if diff -ru --exclude=.git "$out" tests/fixtures/rendered-monorepo; then
+            echo "The fixture still matches what the scaffold produces."
+            exit 0
+          fi
+
+          echo "::error::tests/fixtures/rendered-monorepo no longer matches scaffolds@main."
+          echo "::error::The gates above are being tested against output the scaffold stopped producing."
+          echo "::error::Regenerate it — the copier command is in this step — and commit the result."
+          exit 1
