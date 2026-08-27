@@ -108,6 +108,7 @@ jobs:
           else
             echo "::notice::$local_rules not vendored yet — running the community packs only."
             echo "::notice::Copy it from datumlabsio/actions/configs/ to pick up the Datum-specific rules."
+            echo "semgrep — community packs only, $local_rules not vendored" >> "$RUNNER_TEMP/datum-degraded.txt"
           fi
 
           # --error makes a finding a failing exit code. Without it Semgrep
@@ -115,6 +116,38 @@ jobs:
           # nobody.
           # shellcheck disable=SC2086
           semgrep scan $args --error --metrics=off --disable-version-check .
+
+      # A security gate that runs DEGRADED is the worst of the three states: it is
+      # green, it did something, and what it did is not what the caller assumes.
+      # Semgrep without the vendored rules runs community packs and none of ours;
+      # gitleaks without a pull request base scans the working tree rather than the
+      # commits under review; Trivy without `gate-on` finds real vulnerabilities
+      # and blocks nothing. All three exit 0.
+      - name: What this job actually did
+        if: always()
+        env:
+          LABEL: "security-baseline / semgrep"
+        run: |
+          set -euo pipefail
+          deg="$RUNNER_TEMP/datum-degraded.txt"
+          [ -f "$deg" ] || : > "$deg"
+          notes=$(paste -sd';' - < "$deg" | sed 's/;/; /g')
+
+          {
+            echo "### ${LABEL}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            if [ -n "$notes" ]; then
+              echo "| **Ran degraded** | ${notes} |"
+            else
+              echo "| Ran | fully configured |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$notes" ]; then
+            echo "::warning::Ran degraded: ${notes}"
+          fi
 
   secrets:
     if: ${{ inputs.gitleaks }}
@@ -156,11 +189,44 @@ jobs:
           # as stopping the next one.
           if [ -z "${BASE:-}" ] || ! git cat-file -e "$BASE" 2>/dev/null; then
             echo "::notice::No pull request base available; scanning the working tree instead."
+            echo "gitleaks — scanned the working tree, not this pull request's commits" >> "$RUNNER_TEMP/datum-degraded.txt"
             gitleaks dir . --no-banner --redact --exit-code 1
             exit 0
           fi
           gitleaks git . --no-banner --redact --exit-code 1 \
             --log-opts="$BASE..$HEAD"
+
+      # A security gate that runs DEGRADED is the worst of the three states: it is
+      # green, it did something, and what it did is not what the caller assumes.
+      # Semgrep without the vendored rules runs community packs and none of ours;
+      # gitleaks without a pull request base scans the working tree rather than the
+      # commits under review; Trivy without `gate-on` finds real vulnerabilities
+      # and blocks nothing. All three exit 0.
+      - name: What this job actually did
+        if: always()
+        env:
+          LABEL: "security-baseline / secrets"
+        run: |
+          set -euo pipefail
+          deg="$RUNNER_TEMP/datum-degraded.txt"
+          [ -f "$deg" ] || : > "$deg"
+          notes=$(paste -sd';' - < "$deg" | sed 's/;/; /g')
+
+          {
+            echo "### ${LABEL}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            if [ -n "$notes" ]; then
+              echo "| **Ran degraded** | ${notes} |"
+            else
+              echo "| Ran | fully configured |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$notes" ]; then
+            echo "::warning::Ran degraded: ${notes}"
+          fi
 
   dependencies:
     if: ${{ inputs.dependency-audit }}

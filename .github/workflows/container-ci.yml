@@ -187,10 +187,40 @@ jobs:
           if [ -z "${GATE_ON:-}" ]; then
             echo "::notice::Reporting only — no severity is gating yet."
             echo "::notice::Set gate-on once the real number is known. Findings above are real; they are not blocking."
+            echo "trivy — scanned but NOT gating, gate-on is unset" >> "$RUNNER_TEMP/datum-degraded.txt"
             exit 0
           fi
           echo "Gating on: $GATE_ON"
           trivy image --severity "$GATE_ON" --exit-code 1 --no-progress "ci-candidate:$GITHUB_SHA"
+
+      # A security gate that runs DEGRADED is the worst of the three states: it is
+      # green, it did something, and what it did is not what the caller assumes.
+      # Trivy without `gate-on` finds real vulnerabilities and blocks nothing.
+      - name: What this job actually did
+        if: always()
+        env:
+          LABEL: "container-ci / build-scan"
+        run: |
+          set -euo pipefail
+          deg="$RUNNER_TEMP/datum-degraded.txt"
+          [ -f "$deg" ] || : > "$deg"
+          notes=$(paste -sd";" - < "$deg" | sed "s/;/; /g")
+
+          {
+            echo "### ${LABEL}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            if [ -n "$notes" ]; then
+              echo "| **Ran degraded** | ${notes} |"
+            else
+              echo "| Ran | fully configured |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$notes" ]; then
+            echo "::warning::Ran degraded: ${notes}"
+          fi
 
   publish:
     needs: build-scan
