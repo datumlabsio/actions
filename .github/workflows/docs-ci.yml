@@ -187,10 +187,21 @@ jobs:
           RFC_DIR: ${{ inputs.rfc-dir }}
           SPEC_DIR: ${{ inputs.spec-dir }}
         run: |
+          # This used to skip. It now fails, deliberately.
+          #
+          # The gate guards the Draft-to-Accepted flip, which was missed three
+          # times by hand (RFC-0008, RFC-0009, RFC-0011) before it existed. It is
+          # the wrong gate to let pass quietly.
+          #
+          # Checkout above uses fetch-depth: 0, and `main` carries
+          # non_fast_forward protection, so the base commit being absent is not a
+          # normal condition — it means something rewrote history or the event
+          # payload is not what it claims. A rerun will not fix that, and a green
+          # tick would say the proposal was checked when it was not.
           if ! git cat-file -e "$BASE" 2>/dev/null; then
-            echo "::notice::Base commit not available; skipping."
-            echo "proposal-status — no base commit to diff against" >> "$RUNNER_TEMP/datum-skipped.txt"
-            exit 0
+            echo "::error::Base commit $BASE is not in this checkout, so proposal status could not be checked."
+            echo "::error::Checkout is full-depth and main is protected, so this is not expected — investigate rather than rerun."
+            exit 1
           fi
 
           changed=$(git diff --name-only "$BASE" HEAD)
