@@ -1,0 +1,23 @@
+# pnpm does not run a dependency's install scripts unless it is listed here. That
+# default is a supply-chain control (DES §6) — an arbitrary postinstall is how a
+# compromised package gets code execution — so keep this list explicit and short.
+onlyBuiltDependencies:
+  - "@tailwindcss/oxide"
+  - sharp
+
+# pnpm also refuses packages published within `minimumReleaseAge`, the control
+# that catches a freshly-compromised release before anyone notices. It bites
+# transitively: a range like `vitest@^4.1.0` resolves to the newest match, so a
+# patch published hours ago is pulled in and then rejected even though the direct
+# pin is older. Holding the family at one aged version avoids that.
+#
+# Renovate bumps these together. Do not raise one by hand.
+overrides:
+  vitest: 4.1.10
+  "@vitest/spy": 4.1.10
+  "@vitest/utils": 4.1.10
+  "@vitest/runner": 4.1.10
+  "@vitest/snapshot": 4.1.10
+  "@vitest/expect": 4.1.10
+  "@vitest/mocker": 4.1.10
+  "@vitest/pretty-format": 4.1.10

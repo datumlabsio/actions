@@ -1,0 +1,21 @@
+# The `ci` target must reach no production data. CI publishes artifacts and the
+# install pulls them (DES §4), so nothing here is a route into the warehouse
+# that serves the client.
+rendered_monorepo:
+  target: ci
+  outputs:
+    ci:
+      # duckdb for CI so a pull request needs no warehouse and no credentials.
+      # The clickhouse target below is what a real run uses.
+      type: duckdb
+      path: "target/ci.duckdb"
+      threads: 1
+
+    prod:
+      type: clickhouse
+      host: "{{ env_var('DBT_HOST') }}"
+      user: "{{ env_var('DBT_USER') }}"
+      password: "{{ env_var('DBT_PASSWORD') }}"
+      schema: "{{ env_var('DBT_SCHEMA', 'marts') }}"
+      secure: true
+      threads: 4

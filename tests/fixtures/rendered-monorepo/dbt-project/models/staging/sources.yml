@@ -1,0 +1,21 @@
+version: 2
+
+# The seed stands in for the real raw table so the repo builds on arrival.
+# When the pipeline lands `raw_example` for real, declare it as a
+# source here and point the staging model at `source()` instead of `ref()`.
+# The schema name must match the pipeline's `dataset_name` exactly — a rename
+# on either side is a breaking change (blocks/dlt.md §3).
+seeds:
+  - name: raw_example
+    description: >-
+      Starter data standing in for the example raw table. Replace
+      with a declared source once the pipeline exists.
+    columns:
+      - name: event_id
+        description: Primary key of the event.
+      - name: customer_id
+        description: The customer this event belongs to.
+      - name: status
+        description: Lifecycle state as reported by the source.
+      - name: amount
+        description: Event value in the source currency.

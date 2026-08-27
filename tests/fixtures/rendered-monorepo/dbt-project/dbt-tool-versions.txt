@@ -1,0 +1,12 @@
+# datum-config: dbt-tool-versions v1
+# Vendored from datumlabsio/actions/configs/dbt-tool-versions.txt. Bump it, do
+# not edit it.
+#
+# The warehouse adapter is NOT pinned here — it differs per install
+# (dbt-bigquery, dbt-clickhouse, dbt-duckdb for local and CI). A repo adds its
+# adapter to its own pyproject.toml or requirements file.
+#
+# Locally:  uv run --with-requirements dbt-tool-versions.txt -- sqlfluff lint models/
+dbt-core==1.12.2
+sqlfluff==4.3.0
+sqlfluff-templater-dbt==4.3.0

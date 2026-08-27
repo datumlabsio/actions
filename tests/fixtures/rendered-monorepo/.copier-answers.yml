@@ -1,0 +1,14 @@
+_commit: v0.10.0
+_src_path: gh:datumlabsio/scaffolds
+archetype: monorepo
+folders:
+- gitops
+- web-app
+- dbt-project
+- dlt-pipeline
+framework: next
+owning_team: platform
+repo_description: A real scaffold render, used as a fixture
+repo_name: rendered-monorepo
+source_name: fixture
+warehouse: clickhouse

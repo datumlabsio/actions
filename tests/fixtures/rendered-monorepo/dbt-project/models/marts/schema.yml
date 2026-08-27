@@ -1,0 +1,26 @@
+version: 2
+
+models:
+  - name: fct_example_by_customer
+    description: >-
+      Completed example value per customer. A mart, so it carries an
+      enforced contract — anything downstream reads this shape or nothing
+      (blocks/dbt.md §2, DPS §4).
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: customer_id
+        description: The customer this row summarises.
+        data_type: integer
+        data_tests:
+          - unique
+          - not_null
+      - name: event_count
+        description: Number of completed events for this customer.
+        data_type: bigint
+        data_tests:
+          - not_null
+      - name: total_amount
+        description: Sum of completed event value for this customer.
+        data_type: double

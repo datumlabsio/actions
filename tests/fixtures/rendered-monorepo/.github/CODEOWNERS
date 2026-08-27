@@ -1,0 +1,19 @@
+# DES §3: the owner is a team, never an individual.
+#
+# A team only counts as an owner if it has WRITE access to this repo. Without
+# that, GitHub silently ignores this file — no error, no warning, and reviews
+# are never requested. Grant it:
+#
+#   gh api -X PUT orgs/datumlabsio/teams/platform/repos/datumlabsio/rendered-monorepo -f permission=push
+
+*                       @datumlabsio/platform
+
+# Files the template owns. A change here is usually a bump, not an edit.
+/.copier-answers.yml    @datumlabsio/platform
+/.github/workflows/     @datumlabsio/platform
+
+# One line per folder. Ownership at the granularity work actually happens.
+/gitops/                @datumlabsio/platform
+/web-app/               @datumlabsio/platform
+/dbt-project/           @datumlabsio/platform
+/dlt-pipeline/          @datumlabsio/platform

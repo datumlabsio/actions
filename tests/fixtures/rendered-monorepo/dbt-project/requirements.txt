@@ -1,0 +1,8 @@
+# The warehouse adapter is this repo's business, not the shared pins — it
+# differs per install. dbt-core and sqlfluff are pinned in
+# dbt-tool-versions.txt, which is vendored and bumped, not edited.
+#
+# dbt-duckdb is always present: CI runs against a duckdb target so a pull
+# request needs no warehouse and no credentials.
+dbt-duckdb==1.11.0
+dbt-clickhouse==1.9.2

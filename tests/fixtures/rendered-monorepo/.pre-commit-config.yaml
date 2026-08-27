@@ -1,0 +1,19 @@
+# DES §3: a pre-commit config in the repo, and a CI stage that runs the same
+# hooks. Owned by the scaffold — bumped by `copier update`, not hand-edited.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # A Helm chart's templates/ holds GO templates — `{{- if }}`,
+        # `{{- define }}` — which are not YAML and never will be. check-yaml
+        # cannot parse them, and it fails on `git commit`, before CI is even
+        # involved. They are validated by `helm lint` and by kubeconform on the
+        # rendered output, which is the only point at which they are YAML.
+        #
+        # Harmless in a repo with no charts: the pattern matches nothing.
+        exclude: '(^|/)charts/[^/]+/templates/'
+      - id: check-merge-conflict
+      - id: check-added-large-files

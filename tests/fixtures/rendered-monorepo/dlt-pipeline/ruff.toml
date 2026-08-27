@@ -1,0 +1,32 @@
+# datum-config: ruff v1
+# Vendored from datumlabsio/actions/configs/ruff.toml. Bump it, do not edit it.
+# A repo extends this in its own pyproject.toml; it does not weaken it without
+# a written reason (DES §5).
+#
+# Rules only — no path-shaped keys. This file sits at a different depth in
+# every repo, and ruff resolves `exclude` and `src` against the config's own
+# location. Anything path-shaped belongs in the repo's pyproject.toml.
+
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # import order
+    "B",    # bugbear
+    "UP",   # pyupgrade
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RUF",  # ruff's own
+]
+
+ignore = [
+    "E501",  # line length is the formatter's job, not the linter's
+]
+
+[format]
+quote-style = "double"
+indent-style = "space"
