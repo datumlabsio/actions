@@ -34,49 +34,57 @@ on:
         default: "`main` is failing its own gates"
 
     secrets:
+      # DEPRECATED and unused since v0.24.0. Kept accepted so that a Renovate
+      # bump of the `uses:` pin does not break a caller whose template has not
+      # been re-rendered yet — an unknown secret is a STARTUP failure, with no
+      # job and no log (B-52).
+      #
+      # They are not silently ignored: passing them logs a notice saying so.
+      # An input accepted and quietly discarded is the `delete_branch_on_merge`
+      # trap, where a caller believes it configured something it did not.
       app-id:
-        description: "The bot's GitHub App id. DES §7: automation is attributable and is not a person."
-        required: true
+        description: "DEPRECATED, unused. This workflow uses GITHUB_TOKEN."
+        required: false
       private-key:
-        description: "The bot's private key."
-        required: true
+        description: "DEPRECATED, unused. This workflow uses GITHUB_TOKEN."
+        required: false
 
+# `issues: write` must be granted by the CALLER. A called workflow can only
+# reduce the caller's permissions, never add to them.
 permissions:
   contents: read
+  issues: write
 
 jobs:
   report:
     runs-on: ubuntu-latest
     steps:
-      - name: Are the App credentials present?
-        id: creds
+      # This used to mint a `datum-police` token. It did not work where it was
+      # needed most: the App credentials are ORGANISATION secrets scoped to
+      # selected repositories, so every newly created repository received an
+      # empty string, skipped the job, and reported success. A weekly scheduled
+      # run that is green and does nothing is worse than no run at all — it is
+      # evidence the machinery works.
+      #
+      # This job only ever opens an issue in its OWN repository, which the
+      # built-in GITHUB_TOKEN does. No secret to distribute, and it works in
+      # every repository from its first commit.
+      #
+      # The cost is attribution: the issue is opened by `github-actions` rather
+      # than `Datum Police ⚖`. B-06 chose an App for bot identity, and this is a
+      # deliberate exception where the App bought nothing and cost coverage.
+      - name: Say if deprecated credentials were passed
         env:
           APP_ID: ${{ secrets.app-id }}
         run: |
           set -euo pipefail
-          # An organisation secret scoped to selected repositories arrives here as
-          # an empty string rather than an error. Without this check the run fails
-          # weekly on a token step, in every repo that was never granted the
-          # secret, and the noise trains people to ignore it.
-          if [ -z "${APP_ID:-}" ]; then
-            echo "::notice::No App credentials in this repository, so nothing ran. Grant it the datum-police secrets to switch this on (B-06)."
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=true" >> "$GITHUB_OUTPUT"
+          if [ -n "${APP_ID:-}" ]; then
+            echo "::notice::app-id/private-key are no longer used by main-watch-report and can be removed from the caller. This run used GITHUB_TOKEN."
           fi
 
-      - name: Mint a token for the run
-        id: token
-        if: steps.creds.outputs.present == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.app-id }}
-          private-key: ${{ secrets.private-key }}
-
       - name: Open, update or close the issue
-        if: steps.creds.outputs.present == 'true'
         env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           FAILED: ${{ inputs.failed }}
           DETAILS: ${{ inputs.details }}
           TITLE: ${{ inputs.title }}
