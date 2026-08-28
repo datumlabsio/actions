@@ -6,7 +6,7 @@ Archetype `monorepo` (DES §8). Born from `datumlabsio/scaffolds`;
 `.copier-answers.yml` records which version, and the org conformance workflow
 reads it.
 
-CI is a thin caller to `datumlabsio/actions`, pinned to `v0.20.0`.
+CI is a thin caller to `datumlabsio/actions`, pinned to `v0.24.0`.
 Org defaults — pull request template, issue forms, security policy — come from
 `datumlabsio/.github` and are not files in this repo.
 
