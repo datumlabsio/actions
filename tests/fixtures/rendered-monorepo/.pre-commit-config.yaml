@@ -7,6 +7,17 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+        # Kubernetes manifests are routinely multi-document — a Service and a
+        # Deployment separated by `---` in one file. Without this, check-yaml
+        # reports "expected a single document in the stream" and fails on
+        # `git commit`, in every gitops repository that has one.
+        #
+        # Found on polaris the day a real multi-document manifest landed. The
+        # pull request that added it was GREEN: it touched only `gitops/`, and
+        # the repository-wide hooks run inside `python-ci`, whose job was
+        # skipped by path filters. `main-watch` runs every folder, so it caught
+        # it 2.5 hours later.
+        args: [--allow-multiple-documents]
         # A Helm chart's templates/ holds GO templates — `{{- if }}`,
         # `{{- define }}` — which are not YAML and never will be. check-yaml
         # cannot parse them, and it fails on `git commit`, before CI is even
