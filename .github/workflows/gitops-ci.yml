@@ -260,63 +260,170 @@ jobs:
 
       # A file that names one client cannot be updated from the template, and it
       # is how a component quietly stops being reusable.
+      # A file that names one client cannot be updated from the template, and it
+      # is how a component quietly stops being reusable.
+      #
+      # THIS PARSES YAML. It used to grep, and grep cannot see structure — so it
+      # read Kubernetes label KEYS as hostnames, then CRD API groups, then RBAC
+      # `apiGroups`. Each was patched with another exclusion pattern. CLAUDE.md
+      # already lists this gate among four occurrences of the same bug class, and
+      # a fifth exclusion would have been the fourth patch to a regex that cannot
+      # answer the question being asked: is this string a hostname reference, or
+      # an API group, a label key, an image ref, an apiVersion? That is a question
+      # about position in the document.
+      #
+      # Nothing is exempted that was not exempt before. Keys are no longer checked
+      # at all, which removes the label problem rather than excluding it.
       - name: Reusable paths name no install
         if: inputs.generic-paths != ''
+        env:
+          PATHS: ${{ inputs.generic-paths }}
         run: |
           set -euo pipefail
-          # An array rather than a space-joined string: word splitting is what
-          # we want here, and an array gets it without shellcheck having to be
-          # silenced — and without breaking on a path containing a space.
-          present=()
-          for base in ${{ inputs.generic-paths }}; do
-            [ -d "$base" ] && present+=("$base")
-          done
-          if [ "${#present[@]}" -eq 0 ]; then
-            echo "::notice::None of ${{ inputs.generic-paths }} exist; nothing to check."
-            echo "reusable-paths — none of ${{ inputs.generic-paths }} exist" >> "$RUNNER_TEMP/datum-skipped.txt"
-            exit 0
-          fi
-          # An IP must be a standalone token: a four-part image tag like
-          # clickhouse-server:24.8.4.13 is not an address, and requiring the
-          # preceding character not to be ':' or a digit keeps those out.
-          # `image:` lines are skipped entirely — a registry hostname and a
-          # version tag both belong to the image-pinning gate, not this one.
-          # `image:` and `repository:` lines are skipped entirely. A registry
-          # hostname belongs to the image-pinning gate, and a Helm dependency
-          # CANNOT resolve without naming where the chart comes from — a
-          # `repository: https://…` in Chart.yaml is required, not a leak.
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 - <<'PY'
+          from __future__ import annotations
+          import ipaddress
+          import os
+          import re
+          import sys
+          from pathlib import Path
+          import yaml
+          # A hostname-shaped value, or a dotted-quad IP.
+          HOSTNAME = re.compile(r"^(?:[a-z0-9-]+\.)+(?:com|io|net|dev|local)$", re.I)
+          # `ipaddress` rather than a regex plus a literal set of addresses. More correct
+          # — it knows 127.0.0.2 is loopback and 169.254.x is link-local — and it keeps
+          # hardcoded addresses out of a public repository, which this repo's own
+          # no_literal_env_values gate enforces and which caught the first version of this.
+          def _is_routable_ip(value):
+              try:
+                  addr = ipaddress.ip_address(value)
+              except ValueError:
+                  return False
+              return not (addr.is_loopback or addr.is_unspecified or addr.is_link_local)
+          # Infrastructure domains that are not an install. These appear in every cluster.
+          INFRA = re.compile(
+              r"(^|\.)(kubernetes\.io|k8s\.io|helm\.sh|fluxcd\.io|githubusercontent\.com)$"
+              r"|^cluster\.local$|^datum\.local$",
+              re.I,
+          )
+          # Keys whose values are never a hostname reference, by what Kubernetes means.
           #
-          # The second filter drops label and annotation KEYS. Every Kubernetes
-          # object carries `app.kubernetes.io/name` and most carry
-          # `pod-security.kubernetes.io/enforce`; those are conventions, not
-          # addresses. The shape `<domain>/<name>:` is what distinguishes a key
-          # from a value — a hostname reference does not have a slash-name after
-          # it.
-          #
-          # kubernetes.io is named explicitly as well: the list already had
-          # k8s.io, which does not match `app.kubernetes.io` at all, so every
-          # standard label slipped straight through.
-          #
-          # The last filter clears our OWN domain, and only where it cannot be a
-          # hostname. `datumlabs.io` is not on the allowlist above, deliberately:
-          # we own it, so an install really could be served at
-          # clickhouse.datumlabs.io — the exact thing this gate exists to catch.
-          # It is cleared only as the whole value of a `group:` or `name:` key,
-          # which is a CustomResourceDefinition's API group and its metadata
-          # name. A hostname under any other key, `host:` included, still fails.
-          hits=$(grep -rInE '(^|[^0-9.:])([0-9]{1,3}\.){3}[0-9]{1,3}([^0-9.]|$)|([a-z0-9-]+\.)+(com|io|net|dev|local)' \
-                   --include='*.yaml' --include='*.yml' "${present[@]}" \
-                 | grep -vE '^[^:]+:[0-9]+:[[:space:]]*-?[[:space:]]*(image|repository):' \
-                 | grep -vE '^[^:]+:[0-9]+:[[:space:]]*-?[[:space:]]*[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}/[A-Za-z0-9._-]+:' \
-                 | grep -vE 'datum\.local|127\.0\.0\.1|0\.0\.0\.0|cluster\.local|schema|apiVersion|helm\.sh|fluxcd\.io|kubernetes\.io|k8s\.io|githubusercontent\.com' \
-                 | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(group|name):[[:space:]]*[a-z0-9.-]+\.datumlabs\.io[[:space:]]*$' || true)
-          if [ -n "$hits" ]; then
-            echo "::error::A hostname or IP appears in a path that must stay reusable across installs."
-            echo "           Move it to this install's values."
-            printf '%s\n' "$hits"
-            exit 1
-          fi
-          echo "Reusable paths are install-agnostic."
+          #   image / repository  — a registry host. The image-pinning gate owns those.
+          #   apiGroups           — RBAC. `platform.datumlabs.io` here is an API group.
+          #   group               — a CustomResourceDefinition's spec.group.
+          #   apiVersion          — `rbac.authorization.k8s.io/v1`.
+          #   kind / name         — see below; `name` is conditional.
+          NEVER_A_HOST = {"image", "repository", "apigroups", "apiversion", "group"}
+          # Go template directives. A line that is ONLY a directive is dropped; an inline
+          # one becomes a placeholder scalar. Without this every Helm template fails to
+          # parse, and those are exactly the files this gate must read.
+          # Helm COMMENTS first, and by their own delimiters. A comment may contain
+          # escaped braces — `{{ "{{" }}job{{ "}}" }}` is how a chart writes Grafana's
+          # legend syntax without Helm executing it — and a non-greedy `{{ … }}` match
+          # stops at the first `}}`, which is inside the comment. `/* … */` is
+          # unambiguous where `{{ … }}` is not.
+          TPL_COMMENT = re.compile(r"\{\{-?\s*/\*.*?\*/\s*-?\}\}", re.S)
+          TPL_SPAN = re.compile(r"\{\{.*?\}\}", re.S)
+          TPL_INLINE = re.compile(r"\{\{-?.*?-?\}\}")
+          TPL_WHOLE_LINE = re.compile(r"^\s*\{\{-?.*?-?\}\}\s*$")
+          def neutralise(text: str) -> str:
+              # Collapse first. A Go template expression can span lines — a `{{- /* … */}}`
+              # comment block is the common one, and `{{- range … }}` arguments wrap — and
+              # line-based rules cannot see a construct that is not on one line. Every
+              # Helm template in polaris that failed to parse failed for this reason.
+              # Replaced with the newlines it consumed, not with a space. A template
+              # construct can sit inside a YAML literal block (`extraEnv: |`), where
+              # indentation is load-bearing — collapsing several lines into one stray
+              # indented space redefines the block's baseline and the file stops parsing.
+              text = TPL_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+              text = TPL_SPAN.sub(lambda m: m.group(0).replace("\n", " "), text)
+              out = []
+              for line in text.splitlines():
+                  if TPL_WHOLE_LINE.match(line):
+                      continue
+                  out.append(TPL_INLINE.sub("TPL", line))
+              return "\n".join(out)
+          def looks_like_host(v: str) -> bool:
+              v = v.strip().strip("\"'")
+              if not v:
+                  return False
+              if _is_routable_ip(v):
+                  return True
+              if not HOSTNAME.match(v):
+                  return False
+              return not INFRA.search(v)
+          def is_crd_name(value: str, path: list) -> bool:
+              """A CustomResourceDefinition's metadata.name.
+              It is <plural>.<group> — shaped exactly like a hostname, and not one. Only
+              accepted directly under `metadata`, so `name:` anywhere else is still
+              checked.
+              """
+              return len(path) >= 2 and path[-1] == "name" and path[-2] == "metadata"
+          def walk(node, path, out):
+              if isinstance(node, dict):
+                  for k, v in node.items():
+                      walk(v, path + [str(k).lower()], out)
+              elif isinstance(node, list):
+                  for item in node:
+                      # A list item inherits its key: `apiGroups: [a, b]` keeps `apigroups`.
+                      walk(item, path, out)
+              elif isinstance(node, str):
+                  out.append((list(path), node))
+          def check(paths):
+              present = [p for p in paths if Path(p).is_dir()]
+              if not present:
+                  print(f"::notice::None of {' '.join(paths)} exist; nothing to check.")
+                  skip = os.environ.get("RUNNER_TEMP")
+                  if skip:
+                      with open(Path(skip) / "datum-skipped.txt", "a") as fh:
+                          fh.write(f"reusable-paths — none of {' '.join(paths)} exist\n")
+                  return 0
+              files, hits, unreadable = 0, [], []
+              for base in present:
+                  for f in sorted(Path(base).rglob("*")):
+                      if f.suffix not in (".yaml", ".yml") or not f.is_file():
+                          continue
+                      files += 1
+                      raw = f.read_text(encoding="utf-8", errors="replace")
+                      try:
+                          docs = list(yaml.safe_load_all(neutralise(raw)))
+                      except yaml.YAMLError as exc:
+                          # NOT swallowed. An unreadable file is a file this gate said
+                          # nothing about, and "found nothing" must never be the same
+                          # output as "could not look".
+                          unreadable.append((f, str(exc).split("\n")[0]))
+                          continue
+                      for doc in docs:
+                          found = []
+                          walk(doc, [], found)
+                          for keypath, value in found:
+                              if not looks_like_host(value):
+                                  continue
+                              key = keypath[-1] if keypath else ""
+                              if key in NEVER_A_HOST:
+                                  continue
+                              if is_crd_name(value, keypath):
+                                  continue
+                              hits.append((f, ".".join(keypath) or "(root)", value))
+              print(f"checked {files} YAML file(s) under {', '.join(present)}")
+              if unreadable:
+                  print("::error::These files could not be parsed, so this gate says "
+                        "nothing about them:")
+                  for f, why in unreadable:
+                      print(f"  {f}: {why}")
+                  return 1
+              if hits:
+                  print("::error::A hostname or IP appears in a path that must stay "
+                        "reusable across installs. Move it to this install's values.")
+                  for f, keypath, value in hits:
+                      print(f"  {f}  {keypath}: {value}")
+                  return 1
+              print("Reusable paths are install-agnostic.")
+              return 0
+          raise SystemExit(check(os.environ["PATHS"].split()))
+
+          PY
 
       # A gate that skips itself and a gate that passes are indistinguishable from
       # outside: both green, both exit 0. §11's quarantine check had never run in
