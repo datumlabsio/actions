@@ -559,42 +559,83 @@ jobs:
       - name: Check out
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Lift the pattern out of gitops-ci, so there is no second copy
+      # Lifted from gitops-ci at runtime so there is no second copy. The gate
+      # is a Python script now, not a grep — it parses the YAML rather than
+      # pattern-matching it, which is why RBAC `apiGroups` and CRD API groups
+      # stopped being findings without an exclusion being added for either.
+      - name: Lift the checker out of gitops-ci, so there is no second copy
         run: |
           set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
           python3 - <<'EX'
-          import pathlib, re, sys
+          import pathlib, sys
           src = pathlib.Path(".github/workflows/gitops-ci.yml").read_text()
-          m = re.search(r"hits=\$\((grep -rInE.*?)\|\| true\)", src, re.S)
-          if not m:
-              sys.exit("could not lift the reusable-paths pattern")
-          body = re.sub(r"\"\$\{present\[@\]\}\"", '"$@"', m.group(1))
-          pathlib.Path("/tmp/reusable.sh").write_text("#!/usr/bin/env bash\nset -uo pipefail\n" + body + "|| true\n")
+          marker = "- name: Reusable paths name no install"
+          if marker not in src:
+              sys.exit("could not find the reusable-paths step in gitops-ci.yml")
+          blk = src.split(marker, 1)[1]
+          if "python3 - <<'PY'" not in blk:
+              sys.exit("the reusable-paths step is no longer a python block; this test needs updating")
+          body = blk.split("python3 - <<'PY'\n", 1)[1].split("\n          PY\n", 1)[0]
+          code = "\n".join(l[10:] if l.startswith(" " * 10) else l for l in body.splitlines())
+          pathlib.Path("/tmp/reusable.py").write_text(code)
           EX
-          chmod +x /tmp/reusable.sh
 
       - name: Kubernetes labels and chart repositories are not findings
         working-directory: tests/fixtures/gitops-ok
+        env:
+          PATHS: "policies charts"
         run: |
           set -euo pipefail
-          out=$(/tmp/reusable.sh policies charts)
-          if [ -n "$out" ]; then
-            echo "::error::Flagged content the scaffold itself generates:"
-            echo "$out"
+          if ! python3 /tmp/reusable.py; then
+            echo "::error::Flagged content the scaffold itself generates."
             exit 1
           fi
           echo "Standard label keys and chart repository URLs pass."
 
+      # The control case. A checker that passes everything passes this fixture
+      # too, and the rewrite from grep to a parser is exactly the change most
+      # likely to loosen it by accident.
       - name: An install hostname is still refused
         working-directory: tests/fixtures/gitops-install-leak
+        env:
+          PATHS: "platform"
         run: |
           set -euo pipefail
-          out=$(/tmp/reusable.sh platform)
-          if ! echo "$out" | grep -q 'acme-corp'; then
+          out=$(python3 /tmp/reusable.py || true)
+          printf '%s\n' "$out"
+          if ! printf '%s' "$out" | grep -q 'acme-corp'; then
             echo "::error::The check no longer catches a real install hostname. It has been loosened too far."
             exit 1
           fi
           echo "Correctly refused."
+
+      # RBAC apiGroups and a CRD's API group are our own domain in a position
+      # where it is not a hostname. These were findings until the gate parsed
+      # YAML, and they are the reason it now does.
+      - name: Our own domain as an API group is not a finding
+        env:
+          PATHS: "probe"
+        run: |
+          set -euo pipefail
+          mkdir -p probe
+          cat > probe/rbac.yaml <<'YAML'
+          rules:
+            - apiGroups: [platform.example.test]
+              resources: [applicationmanifests]
+          ---
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: applicationmanifests.platform.example.test
+          spec:
+            group: platform.example.test
+          YAML
+          if ! python3 /tmp/reusable.py; then
+            echo "::error::An API group was read as a hostname. This is the bug the parser exists to remove."
+            exit 1
+          fi
+          echo "API groups are not hostnames."
 
   # B-19. Two gitops gates had never been watched refusing anything: the image
   # pinning check and the plaintext-secret check. Both are hand-written greps,
