@@ -28,10 +28,10 @@ door for the rest of the standard.
 - No archetype, no scaffold, no `copier`
 - Nothing is published or deployed
 
-## The whole of it — `.github/workflows/datum-security.yml`
+## The whole of it — `.github/workflows/datum-police.yml`
 
 ```yaml
-name: datum-security
+name: datum-police
 
 on:
   pull_request:
