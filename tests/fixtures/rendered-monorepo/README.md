@@ -20,7 +20,7 @@ It is a one-off per clone. Git hooks live in `.git/`, which is not version
 controlled, so committing the config cannot do this for you.
 
 CI runs the `monorepo` archetype workflow from `datumlabsio/actions`,
-pinned to `v0.24.0`. To reproduce it locally, see `CLAUDE.md`.
+pinned to `v0.27.1`. To reproduce it locally, see `CLAUDE.md`.
 
 ## Changing it
 
