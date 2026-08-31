@@ -1,0 +1,92 @@
+name: pre-commit
+
+# DES §3 requires a pre-commit config AND a CI stage that runs the same hooks.
+# The second half was not true for most repositories.
+#
+# The hooks check the WHOLE repository — trailing whitespace, end-of-file,
+# check-yaml, check-merge-conflict, check-added-large-files — but the stage that
+# ran them lived inside `python-ci`. Two consequences:
+#
+#   1. A pull request touching no Python folder skipped them. Path filters.
+#   2. A repository with NO Python folder never ran them at all. A gitops-only,
+#      web-app-only or docs repository has never executed a single one.
+#
+# Found on polaris: a multi-document Kubernetes manifest that `check-yaml`
+# rejects landed on `main` through a GREEN pull request. It touched only
+# `gitops/` and `docs/`, so the one job that runs the hooks was skipped. polaris
+# was lucky enough to have a `dlt-pipeline` for the weekly watch to trip over.
+# A gitops-only repository would never have found out.
+#
+# So the hooks move to a workflow every archetype calls, the way
+# `security-baseline` already does — because "every repository can leak a
+# credential" and "every repository can have trailing whitespace" are the same
+# kind of claim.
+
+on:
+  workflow_call:
+    inputs:
+      config-dir:
+        description: >-
+          Where the vendored `security-tool-versions.txt` lives. The repository
+          root for a standalone archetype.
+        type: string
+        default: "."
+
+      version:
+        description: >-
+          Fallback pre-commit version, used only when the vendored file does not
+          pin one. Exists so that bumping the `uses:` pin — which Renovate does
+          without re-rendering the scaffold — cannot break a repository whose
+          vendored config predates the pin being added there.
+        type: string
+        default: "4.6.2"
+
+permissions:
+  contents: read
+
+jobs:
+  hooks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v5.0.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      - name: Run the hooks
+        env:
+          CONFIG_DIR: ${{ inputs.config-dir }}
+          FALLBACK: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          # The config lives at the REPOSITORY root, never inside a component
+          # folder — that is where the scaffold puts it and where pre-commit
+          # resolves hooks from.
+          root="$(git rev-parse --show-toplevel)"
+          if [ ! -f "$root/.pre-commit-config.yaml" ]; then
+            echo "::error::No .pre-commit-config.yaml at the repository root. DES §3 requires one, and a CI stage that runs the same hooks."
+            exit 1
+          fi
+
+          # Prefer the vendored pin. Fall back to this workflow's default rather
+          # than failing: a repository that has not re-rendered since `pre-commit`
+          # was added to the vendored file would otherwise go red the moment
+          # Renovate bumped the pin above, which is a gate breaking repos for
+          # being out of date rather than for being wrong.
+          p="$CONFIG_DIR/security-tool-versions.txt"
+          version=""
+          if [ -f "$p" ]; then
+            version=$(grep '^pre-commit=' "$p" | cut -d= -f2- || true)
+          fi
+          if [ -n "$version" ]; then
+            echo "::notice::pre-commit $version, pinned in $p."
+          else
+            version="$FALLBACK"
+            echo "::notice::$p does not pin pre-commit, so $version is used. Run 'copier update' to take the pinned one."
+          fi
+
+          cd "$root"
+          uv run --with "pre-commit==$version" -- \
+            pre-commit run --all-files --show-diff-on-failure
