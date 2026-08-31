@@ -69,13 +69,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      # EVERY file, not just markdown. `copier update` leaves conflict markers
+      # in place and still exits 0, so a `scaffold-update` pull request can carry
+      # a broken file and report success. With `--include='*.md'` the only thing
+      # that noticed was luck:
+      #
+      #   - the marker gate skipped it — not markdown
+      #   - actionlint skipped it — not a workflow
+      #   - the `check-merge-conflict` pre-commit hook never ran — it lives inside
+      #     python-ci, and a gitops repo has no Python (B-66)
+      #
+      # A conflicted `.pre-commit-config.yaml` merged green while no longer being
+      # valid YAML. Three gaps lined up; this closes the one that costs a word.
+      #
+      # `.git` is excluded because a rebase in progress legitimately holds markers
+      # in its own metadata.
       - name: No conflict markers
         run: |
-          if grep -rn '^<<<<<<< \|^>>>>>>> ' --include='*.md' . ; then
+          if grep -rn '^<<<<<<< \|^>>>>>>> ' --exclude-dir=.git . ; then
             echo "::error::Conflict markers left in a merged file."
             exit 1
           fi
-          echo "No conflict markers."
+          echo "No conflict markers, in any file."
 
       - name: Relative links resolve
         if: inputs.link-check
