@@ -44,6 +44,19 @@ on:
         description: "Validate the pull request title (DES §3)."
         type: boolean
         default: true
+      eval-assumes-dir:
+        description: >-
+          Directory of eval-case JSON files carrying an `assumes` block. Checked
+          against what the specs and proposals actually say now. Requires
+          eval-spec-map.
+        type: string
+        default: ""
+      eval-spec-map:
+        description: >-
+          `key=dir` pairs mapping the short names in a case's `assumes` block to
+          directories under spec-dir, e.g. "dps=platform,des=engineering".
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -68,3 +81,5 @@ jobs:
       vocabulary-allow-files: ${{ inputs.vocabulary-allow-files }}
       rfc-dir: ${{ inputs.rfc-dir }}
       spec-dir: ${{ inputs.spec-dir }}
+      eval-assumes-dir: ${{ inputs.eval-assumes-dir }}
+      eval-spec-map: ${{ inputs.eval-spec-map }}

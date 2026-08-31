@@ -1,0 +1,2 @@
+{"id":"stale","prompt":"x","expected":{},
+ "assumes":{"dps":"0.2.0-draft","des":"0.1.0-draft","rfcs":["0007-draft"]}}

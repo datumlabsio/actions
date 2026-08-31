@@ -57,6 +57,25 @@ on:
         type: string
         default: ""
 
+      eval-assumes-dir:
+        description: >-
+          Directory of eval-case JSON files. Each case MAY carry an `assumes`
+          block naming the spec versions and proposal statuses its expected
+          answer was written against. This checks those against what the
+          repository actually says now, so a case cannot go on asserting an
+          answer the standard has moved past. Requires eval-spec-map.
+        type: string
+        default: ""
+
+      eval-spec-map:
+        description: >-
+          Comma-separated `key=dir` pairs mapping the short names used in a
+          case's `assumes` block to directories under spec-dir — for example
+          "dps=platform,des=engineering". Supplied by the repo because the
+          short names are its own vocabulary, not this workflow's.
+        type: string
+        default: ""
+
 permissions:
   contents: read
 
@@ -193,6 +212,28 @@ jobs:
       # The proposal's status flips on that pull request, never afterwards — so
       # a pull request that ships spec text while leaving its proposal in Draft
       # leaves the repository saying two different things.
+
+      # The checker is a file, not inlined YAML, so it can be tested. tests/
+      # eval_assumes.py is exercised against an -ok and a -drifted fixture in
+      # self-test.yml; a check that has only ever returned one answer is untested.
+      - name: Fetch the checker
+        if: inputs.eval-assumes-dir != '' && inputs.eval-spec-map != ''
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: datumlabsio/actions
+          ref: ${{ github.job_workflow_sha }}
+          path: .datum-actions
+          persist-credentials: false
+
+      - name: Eval cases assume the standard as it is now
+        if: inputs.eval-assumes-dir != '' && inputs.eval-spec-map != ''
+        run: |
+          python3 .datum-actions/tests/eval_assumes.py \
+            --cases "${{ inputs.eval-assumes-dir }}" \
+            --specs "${{ inputs.spec-dir }}" \
+            --rfcs  "${{ inputs.rfc-dir }}" \
+            --map   "${{ inputs.eval-spec-map }}"
+
       - name: Proposal status matches what shipped
         if: >-
           github.event_name == 'pull_request' &&

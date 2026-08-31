@@ -235,6 +235,23 @@ jobs:
           fi
           echo "Correctly rejected."
 
+
+      - name: eval-assumes gate answers both ways
+        run: |
+          M="dps=platform,des=engineering"
+          F=tests/fixtures
+          # known-good: every stamp matches the specs beside it
+          python3 tests/eval_assumes.py --cases $F/eval-assumes-ok/cases \
+            --specs $F/eval-assumes-ok/specs --rfcs $F/eval-assumes-ok/rfcs --map "$M"
+          # known-bad: a spec four minors behind and an RFC status that moved.
+          # A gate that has only ever returned one answer is untested.
+          if python3 tests/eval_assumes.py --cases $F/eval-assumes-drifted/cases \
+               --specs $F/eval-assumes-drifted/specs \
+               --rfcs $F/eval-assumes-drifted/rfcs --map "$M"; then
+            echo "::error::the drifted fixture passed — the gate cannot fail"
+            exit 1
+          fi
+          echo "eval-assumes gate fails on drift and passes on current"
       - name: A quarantine past its date fails
         run: |
           set -euo pipefail

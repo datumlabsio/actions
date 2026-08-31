@@ -1,0 +1,2 @@
+{"id":"current","prompt":"x","expected":{},
+ "assumes":{"dps":"0.2.0-draft","des":"0.4.0-draft","rfcs":["0008-accepted","0007-rejected-superseded"]}}
