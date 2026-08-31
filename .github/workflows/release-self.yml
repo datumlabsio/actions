@@ -11,6 +11,19 @@ on:
   push:
     branches: [main]
 
+  # Leaving 0.x is a decision, and nothing in Conventional Commits can express
+  # it — below 1.0.0 a breaking change is a minor bump, deliberately, so no
+  # commit message can ever produce 1.0.0. DES §3 forbids tagging by hand, so
+  # without this input there is no way to declare the interface stable at all.
+  #
+  # Dispatch-only and default false: a push must never cut a major by accident.
+  workflow_dispatch:
+    inputs:
+      first-stable:
+        description: "Cut 1.0.0 from this 0.x line. One time, deliberate."
+        type: boolean
+        default: false
+
 # release.yml declares no permissions of its own by design — a called workflow
 # cannot ask for more than its caller grants. Creating a tag and a release
 # needs write, so the caller grants it here and nowhere else.
@@ -25,3 +38,6 @@ concurrency:
 jobs:
   release:
     uses: ./.github/workflows/release.yml
+    with:
+      # false on a push, so the normal path is untouched.
+      first-stable: ${{ github.event_name == 'workflow_dispatch' && inputs.first-stable || false }}
