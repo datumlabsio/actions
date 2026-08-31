@@ -53,6 +53,19 @@ on:
         type: string
         default: "."
 
+      semgrep-version:
+        description: >-
+          Fallback Semgrep version, used only when no vendored
+          `security-tool-versions.txt` pins one. Exists so a repository we do not
+          scaffold can adopt this with ONE file instead of two.
+        type: string
+        default: "1.174.0"
+
+      gitleaks-version:
+        description: "Fallback gitleaks version. Same reasoning as semgrep-version."
+        type: string
+        default: "8.30.1"
+
       config-dir:
         description: "Where the vendored configs live, relative to working-directory."
         type: string
@@ -75,19 +88,39 @@ jobs:
       - name: Check out
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      # The vendored file is PREFERRED, not required. Requiring it made adoption
+      # a two-file job — the workflow and the config — which cannot be a
+      # copy-paste, a starter template, or a single pull request. A repository we
+      # did not scaffold has no vendored config and never will.
+      #
+      # Falling back is still pinned: the version comes from this workflow, which
+      # is released and immutable. What is lost is Renovate bumping it in THEIR
+      # repository, which is the correct trade for a repository that has no
+      # Renovate.
+      #
+      # Which one was used is printed either way, so a scaffolded repository
+      # cannot silently drift onto the fallback.
       - name: Install the pinned Semgrep
+        env:
+          FALLBACK: ${{ inputs.semgrep-version }}
         run: |
           set -euo pipefail
           p="$CONFIG_DIR/security-tool-versions.txt"
-          if [ ! -f "$p" ]; then
-            echo "::error::$p not found. It is vendored in by the scaffold — copy it from datumlabsio/actions/configs/."
-            exit 1
+          version=""
+          if [ -f "$p" ]; then
+            if ! head -3 "$p" | grep -q '^# datum-config:'; then
+              echo "::error::$p has no '# datum-config:' version stamp. A vendored config is bumped, never hand-written."
+              exit 1
+            fi
+            version=$(grep '^semgrep=' "$p" | cut -d= -f2- || true)
           fi
-          if ! head -3 "$p" | grep -q '^# datum-config:'; then
-            echo "::error::$p has no '# datum-config:' version stamp. A vendored config is bumped, never hand-written."
-            exit 1
+          if [ -n "$version" ]; then
+            echo "::notice::Semgrep $version, pinned in $p."
+          else
+            version="$FALLBACK"
+            echo "::notice::No vendored semgrep pin, so $version is used. Vendor security-tool-versions.txt to let Renovate bump it here."
           fi
-          pipx install "semgrep==$(grep '^semgrep=' "$p" | cut -d= -f2)" >/dev/null
+          pipx install "semgrep==$version" >/dev/null
           semgrep --version
 
       - name: Scan
@@ -165,10 +198,21 @@ jobs:
           fetch-depth: 0
 
       - name: Install the pinned gitleaks
+        env:
+          FALLBACK: ${{ inputs.gitleaks-version }}
         run: |
           set -euo pipefail
           p="$CONFIG_DIR/security-tool-versions.txt"
-          v=$(grep '^gitleaks=' "$p" | cut -d= -f2)
+          v=""
+          if [ -f "$p" ]; then
+            v=$(grep '^gitleaks=' "$p" | cut -d= -f2- || true)
+          fi
+          if [ -n "$v" ]; then
+            echo "::notice::gitleaks $v, pinned in $p."
+          else
+            v="$FALLBACK"
+            echo "::notice::No vendored gitleaks pin, so $v is used."
+          fi
           mkdir -p "$RUNNER_TEMP/bin"
           curl -sSL --fail \
             "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" \
