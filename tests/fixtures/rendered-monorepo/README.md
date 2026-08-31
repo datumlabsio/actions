@@ -39,3 +39,5 @@ copier update --trust
 
 Review the diff like any pull request. Files the template owns are **bumped,
 never hand-edited** — that includes the vendored configs and the CI caller.
+
+<!-- zz-drift-proof: a deliberate change so the fixture drifts -->
