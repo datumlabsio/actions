@@ -6,3 +6,7 @@
 # raises these; see datumlabsio/.github/docs/renovate.md.
 semgrep=1.174.0
 gitleaks=8.30.1
+
+# Archetype-independent too: every repository has whitespace, YAML and merge
+# conflicts, not only the ones with Python in them.
+pre-commit=4.6.2
