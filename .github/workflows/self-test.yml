@@ -92,9 +92,19 @@ jobs:
       - name: Install the pinned sqlfluff
         run: |
           set -euo pipefail
-          v=$(grep '^sqlfluff=' configs/dbt-tool-versions.txt | cut -d= -f2)
+          # Take the pin verbatim from the requirements file rather than parsing a
+          # version out of it -- dbt-tool-versions.txt is pip format (name==x.y.z),
+          # and splitting on '=' silently yields an empty version.
+          pin=$(grep '^sqlfluff==' configs/dbt-tool-versions.txt)
+          if [ -z "$pin" ]; then
+            echo "::error::No sqlfluff== pin in configs/dbt-tool-versions.txt."
+            exit 1
+          fi
           python3 -m venv .sqvenv
-          .sqvenv/bin/pip install --quiet --disable-pip-version-check "sqlfluff==$v"
+          .sqvenv/bin/pip install --quiet --disable-pip-version-check "$pin"
+          # The test skips when sqlfluff is missing, which would be a silent pass
+          # here. Make the install prove itself instead.
+          .sqvenv/bin/python -m sqlfluff --version
 
       - name: The exemptions are scoped, and the rules still bite
         run: .sqvenv/bin/python tests/sqlfluff_config.py
