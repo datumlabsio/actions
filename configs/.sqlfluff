@@ -1,4 +1,4 @@
-# datum-config: sqlfluff v1
+# datum-config: sqlfluff v2
 # Vendored from datumlabsio/actions/configs/.sqlfluff. Bump it, do not edit it.
 #
 # One shared SQL config for dbt and everything else (DES §5). Rules only — no
@@ -32,12 +32,32 @@ extended_capitalisation_policy = lower
 
 [sqlfluff:rules:capitalisation.functions]
 extended_capitalisation_policy = lower
+# ClickHouse function names are CASE-SENSITIVE and camelCase by convention:
+# toDateTime, toStartOfMonth, toYYYYMM. With dialect = ansi, CP03 does not
+# recognise them as function names and `sqlfluff fix` rewrites toDateTime to
+# todatetime -- which is not a function, so the model breaks at run time on the
+# production warehouse. It happened on polaris.
+#
+# Setting dialect = clickhouse does NOT help: CP03 applies the policy regardless
+# of dialect. Measured, not assumed.
+#
+# This exempts the camelCase `to*` family and nothing else. COUNT and Sum are
+# still findings.
+ignore_words_regex = ^to[A-Z]
 
 [sqlfluff:rules:capitalisation.literals]
 capitalisation_policy = lower
 
 [sqlfluff:rules:capitalisation.types]
 extended_capitalisation_policy = lower
+
+[sqlfluff:rules:references.keywords]
+# `month` is the idiomatic column name on a monthly fact table, and RF04 flags it
+# because ANSI reserves MONTH. Forcing month_start on every monthly mart in the
+# org is the linter dictating analytics naming, so this one word is exempt.
+# `year`, `order`, `select` and the rest are still findings -- ignore_words is
+# scoped to exactly what it lists.
+ignore_words = month
 
 [sqlfluff:rules:aliasing.table]
 aliasing = explicit
