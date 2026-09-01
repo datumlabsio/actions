@@ -122,6 +122,31 @@ def main() -> int:
     if not ok:
         failures.append("main is stamped")
 
+    # The release step's rewrite has never run -- it only fires when a tag is
+    # cut. Apply its exact regex to the real file here, so a shape change in the
+    # workflow is caught now rather than by a release that silently ships
+    # unstamped code to every future adopter.
+    text = WORKFLOW.read_text()
+    stamped, n = re.subn(
+        r'(DATUM_RELEASED_ON: ")[0-9-]+(" # datum-release-stamp)',
+        r'\g<1>2026-09-01\g<2>', text, count=1)
+    ok = n == 1 and 'DATUM_RELEASED_ON: "2026-09-01" # datum-release-stamp' in stamped
+    print(f"    [{'ok' if ok else 'FAIL'}] release.yml's rewrite matches the shipped file")
+    if not ok:
+        failures.append("stamp regex does not match the file it rewrites")
+
+    # And the stamped result must actually parse as a workflow, and expire.
+    import yaml
+    try:
+        doc = yaml.safe_load(stamped)
+        got = doc.get("env", {}).get("DATUM_RELEASED_ON")
+        ok = got == "2026-09-01"
+    except Exception as e:  # noqa: BLE001
+        ok, got = False, f"unparseable: {e}"
+    print(f"    [{'ok' if ok else 'FAIL'}] a stamped file is still valid YAML ({got})")
+    if not ok:
+        failures.append("stamped file does not parse")
+
     if failures:
         print(f"\nFAIL: {len(failures)} case(s): {', '.join(failures)}")
         return 1
