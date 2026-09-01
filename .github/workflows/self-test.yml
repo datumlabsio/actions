@@ -389,10 +389,14 @@ jobs:
   # filter or the exit-code decision that follows it. Without this, a broken
   # filter ships green: the placeholder rule would be tested only by a unit test
   # of a script nothing had been observed running.
+  #
+  # The fixture is NOT under tests/ because Semgrep's default ignore list
+  # excludes tests/ -- kept there, this job reported "Ran 1077 rules on 0 files"
+  # and passed while scanning nothing.
   security-baseline-placeholder-key:
     uses: ./.github/workflows/security-baseline.yml
     with:
-      working-directory: tests/fixtures/security-placeholder-key
+      working-directory: fixtures-scanned
       gitleaks: false
       dependency-audit: false
 

@@ -1,5 +1,10 @@
 # Fixture: a private-key match that carries no private key
 
+> **This lives outside `tests/` on purpose.** Semgrep's default ignore list
+> excludes `tests/`, so a fixture kept there is never scanned -- the job that
+> uses it passes while checking nothing. It was written under `tests/fixtures/`
+> first and reported "Ran 1077 rules on 0 files". Do not move it back.
+
 This is the shape real setup documentation takes, and it is the most common
 false positive the security baseline meets on a repository it did not scaffold.
 
