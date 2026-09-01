@@ -47,6 +47,21 @@ jobs:
       - name: No hardcoded accounts, hosts, addresses or client names
         run: python3 tests/no_literal_env_values.py .github/workflows
 
+  # The placeholder-key filter DROPS security findings, so it is tested by
+  # extracting the script security-baseline.yml actually ships, rather than a
+  # copy kept beside it. Real keys of four formats are generated at run time and
+  # must all survive; the shapes that get dropped must carry no private bytes.
+  # Length is never the discriminator -- a PKCS#8 ed25519 key is 48 bytes,
+  # smaller than the 52-byte truncated header this exists to suppress.
+  placeholder-key-filter:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: A suppressed finding must provably carry no key
+        run: python3 tests/placeholder_key_filter.py
+
   # docs-ci run against this repo, with every optional check switched on, so a
   # change to any of them is exercised here first.
   docs-ci:
@@ -367,6 +382,24 @@ jobs:
 
   # security-baseline against fixtures, because a scanner nobody has watched
   # refuse anything is a scanner you hope works.
+  # The reusable workflow itself, called end to end against a fixture whose only
+  # Semgrep finding is a private-key match carrying no private key. It must pass.
+  #
+  # The job above scans fixtures with Semgrep directly, which never exercises the
+  # filter or the exit-code decision that follows it. Without this, a broken
+  # filter ships green: the placeholder rule would be tested only by a unit test
+  # of a script nothing had been observed running.
+  #
+  # The fixture is NOT under tests/ because Semgrep's default ignore list
+  # excludes tests/ -- kept there, this job reported "Ran 1077 rules on 0 files"
+  # and passed while scanning nothing.
+  security-baseline-placeholder-key:
+    uses: ./.github/workflows/security-baseline.yml
+    with:
+      working-directory: fixtures-scanned
+      gitleaks: false
+      dependency-audit: false
+
   security-baseline:
     runs-on: ubuntu-latest
     env:

@@ -71,6 +71,14 @@ on:
         type: string
         default: "."
 
+      suppress-placeholder-keys:
+        description: >-
+          Drop detected-private-key findings whose PEM block provably contains
+          no private bytes -- a real key header truncated for documentation.
+          Every suppression is printed. Set false for raw Semgrep output.
+        type: boolean
+        default: true
+
 permissions:
   contents: read
 
@@ -144,11 +152,220 @@ jobs:
             echo "semgrep — community packs only, $local_rules not vendored" >> "$RUNNER_TEMP/datum-degraded.txt"
           fi
 
-          # --error makes a finding a failing exit code. Without it Semgrep
-          # prints findings and exits 0, which is a scanner that reports to
-          # nobody.
+          # Semgrep keeps printing its own findings. --json-output gives the
+          # placeholder filter something to read. A failing exit code is
+          # decided in a later step, AFTER filtering, so a suppressed
+          # placeholder cannot fail the job and a real finding still does.
           # shellcheck disable=SC2086
-          semgrep scan $args --error --metrics=off --disable-version-check .
+          semgrep scan $args --metrics=off --disable-version-check \
+            --json-output="$RUNNER_TEMP/semgrep.json" . || true
+
+          if [ ! -s "$RUNNER_TEMP/semgrep.json" ]; then
+            echo "::error::Semgrep produced no JSON. Refusing to report a clean result while blind."
+            exit 1
+          fi
+
+      # Setup documentation that shows how to paste a private key trips
+      # detected-private-key. The block is a REAL key header truncated for
+      # display, so the rule is right that these are key header bytes and wrong
+      # that anything secret is present: what precedes the private section is a
+      # fixed format header and the public key, and neither is a secret.
+      #
+      # This drops ONLY blocks proven to hold no private bytes, and prints every
+      # suppression with its file, line and reason. Nothing is dropped quietly.
+      - name: Set aside private-key matches that carry no key
+        if: ${{ inputs.suppress-placeholder-keys }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/placeholder_keys.py" <<'DATUM_PLACEHOLDER_FILTER'
+          """Suppress detected-private-key findings that provably contain NO private bytes.
+
+          Semgrep's rule matches on the PEM header plus a base64-looking line, so
+          documentation that writes `YOUR_KEY_HERE` never fires. The one shape that does
+          is a REAL header truncated for display:
+
+              -----BEGIN OPENSSH PRIVATE KEY-----
+              b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAA...
+              ... (full private key) ...
+              -----END OPENSSH PRIVATE KEY-----
+
+          Those leading bytes are byte-identical in every unencrypted OpenSSH key ever
+          generated. They are not a secret, and they are the single most common false
+          positive when this baseline meets a repository's setup docs.
+
+          THE TEST IS NOT LENGTH. A PKCS#8 ed25519 private key is 48 bytes -- smaller
+          than the 52-byte truncated header this exists to suppress. Any length
+          threshold that catches the placeholder also throws away a real key.
+
+          The test is whether the block contains any byte of the PRIVATE portion:
+
+            1. no base64 body at all                        -> suppress
+            2. OpenSSH, truncated before the private blob   -> suppress
+            3. DER, truncated inside the first 16 bytes     -> suppress
+                                                               (no algorithm's private
+                                                                material begins earlier)
+
+          Everything else is kept, including a real key whose middle has been elided for
+          documentation. Partial key exposure is a real attack -- given enough bits of an
+          RSA private key, the rest is recoverable -- so a block holding some genuine
+          private bytes is a finding, not a placeholder.
+          """
+          import base64
+          import json
+          import os
+          import re
+          import sys
+
+          RULE = "detected-private-key"
+          BEGIN = re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----")
+          END = re.compile(r"-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----")
+          B64_LINE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
+          OPENSSH_MAGIC = b"openssh-key-v1\x00"
+          DER_MIN_PRIVATE_OFFSET = 16
+
+
+          def pem_body(path, start_line):
+              try:
+                  lines = open(path, encoding="utf-8", errors="replace").read().split("\n")
+              except OSError:
+                  return None
+              i = start_line - 1
+              limit = min(len(lines), start_line + 2)
+              while i < limit and not BEGIN.search(lines[i]):
+                  i += 1
+              if i >= limit:
+                  return None
+              body = []
+              for ln in lines[i + 1:]:
+                  if END.search(ln):
+                      break
+                  s = ln.strip()
+                  if B64_LINE.match(s):
+                      body.append(s)
+              return "".join(body)
+
+
+          def decode(b64):
+              try:
+                  return base64.b64decode(b64 + "=" * (-len(b64) % 4), validate=True)
+              except Exception:
+                  return None
+
+
+          def openssh_reaches_private(raw):
+              """True if the blob extends into the private section."""
+              p = len(OPENSSH_MAGIC)
+
+              def field(o):
+                  if o + 4 > len(raw):
+                      return None
+                  n = int.from_bytes(raw[o:o + 4], "big")
+                  return None if o + 4 + n > len(raw) else o + 4 + n
+
+              for _ in range(3):                      # ciphername, kdfname, kdfoptions
+                  p = field(p)
+                  if p is None:
+                      return False
+              if p + 4 > len(raw):                    # number of keys
+                  return False
+              p = field(p + 4)                        # public key
+              if p is None:
+                  return False
+              return p + 4 <= len(raw)                # any byte of the private blob
+
+
+          def der_truncated_before_private(raw):
+              if len(raw) < 2 or raw[0] != 0x30:
+                  return False
+              n = raw[1]
+              if n < 0x80:
+                  declared, hdr = n, 2
+              else:
+                  k = n & 0x7F
+                  if k == 0 or 2 + k > len(raw):
+                      return len(raw) < DER_MIN_PRIVATE_OFFSET
+                  declared, hdr = int.from_bytes(raw[2:2 + k], "big"), 2 + k
+              if hdr + declared <= len(raw):
+                  return False                        # complete
+              return len(raw) < DER_MIN_PRIVATE_OFFSET
+
+
+          def classify(path, start_line):
+              """(suppress, reason)."""
+              b64 = pem_body(path, start_line)
+              if b64 is None:
+                  return False, "PEM block not readable — kept"
+              if not b64:
+                  return True, "no base64 body between the PEM markers"
+              raw = decode(b64)
+              if raw is None:
+                  return False, "body is not valid base64 — kept"
+              if raw.startswith(OPENSSH_MAGIC):
+                  if openssh_reaches_private(raw):
+                      return False, "complete OpenSSH key material"
+                  return True, ("OpenSSH block ends after %d bytes, before the private "
+                                "section begins; what is present is header and public key, "
+                          "neither of them secret" % len(raw))
+              if der_truncated_before_private(raw):
+                  return True, "DER block truncated at %d bytes, before any private material" % len(raw)
+              return False, "carries private key bytes"
+
+
+          def main():
+              path = sys.argv[1]
+              doc = json.load(open(path))
+              kept, dropped = [], []
+              for r in doc.get("results", []):
+                  if not r.get("check_id", "").endswith(RULE):
+                      kept.append(r)
+                      continue
+                  suppress, why = classify(r["path"], r["start"]["line"])
+                  if suppress:
+                      dropped.append((r["path"], r["start"]["line"], why))
+                  else:
+                      kept.append(r)
+
+              # Write the survivors back. The next step decides the exit code
+              # from this file, so forgetting this would make the whole filter
+              # decorative -- it would print suppressions and change nothing.
+              doc["results"] = kept
+              json.dump(doc, open(path, "w"))
+
+              # Nothing is dropped quietly. Every suppression is a line in the
+              # log and a row in the job summary.
+              for f, line, why in dropped:
+                  print(f"::notice file={f},line={line}::Not a finding: {why}")
+
+              summary = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary:
+                  with open(summary, "a") as fh:
+                      fh.write("### security-baseline / placeholder keys\n\n")
+                      if dropped:
+                          fh.write("| File | Line | Why it is not a finding |\n|---|---|---|\n")
+                          for f, line, why in dropped:
+                              fh.write(f"| `{f}` | {line} | {why} |\n")
+                      else:
+                          fh.write("Nothing suppressed.\n")
+                      fh.write(f"\n{len(kept)} finding(s) remain.\n")
+
+              print(f"placeholder-key filter: {len(dropped)} suppressed, {len(kept)} remain")
+
+
+          if __name__ == "__main__":
+              main()
+          DATUM_PLACEHOLDER_FILTER
+          python3 "$RUNNER_TEMP/placeholder_keys.py" "$RUNNER_TEMP/semgrep.json"
+
+      - name: Decide the result
+        run: |
+          set -euo pipefail
+          n=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["results"]))' \
+            "$RUNNER_TEMP/semgrep.json")
+          if [ "$n" -gt 0 ]; then
+            echo "::error::Semgrep: $n finding(s). See the scan output above."
+            exit 1
+          fi
+          echo "::notice::Semgrep: no findings."
 
       # A security gate that runs DEGRADED is the worst of the three states: it is
       # green, it did something, and what it did is not what the caller assumes.

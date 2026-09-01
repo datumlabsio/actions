@@ -24,6 +24,25 @@ gitleaks fails the pull request instead — by which point the secret is already
 
 Both are enabled on the two public repos, where GitHub's is free.
 
+## Private-key matches that carry no key
+
+Semgrep's `detected-private-key` fires on real PEM header bytes. Setup
+documentation that shows how to paste a deploy key contains exactly those bytes,
+truncated for display, and is the most common false positive this baseline meets
+on a repository it did not scaffold.
+
+Such a finding is dropped **only when the block provably holds no byte of the
+private section** — what remains is a fixed format header and, at most, the
+public key. Every suppression is printed with its file, line and reason, in the
+log and the job summary.
+
+**The test is never length.** A PKCS#8 ed25519 private key is 48 bytes, smaller
+than the 52-byte truncated header being suppressed, so any threshold that
+catches the placeholder discards a real key. A key with its middle elided is
+kept: it still carries private bytes, and partial key recovery is a real attack.
+
+Set `suppress-placeholder-keys: false` for raw output.
+
 ## What it scans, and what it deliberately does not
 
 **gitleaks scans the commits this pull request adds**, not all history. A first full-history scan on an old repo surfaces every credential ever committed — all needing rotation, none of them this author's doing. That is a migration, and it is not the same job as stopping the next one.

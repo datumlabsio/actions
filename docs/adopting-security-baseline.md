@@ -96,6 +96,42 @@ git remote. Removing the line is not enough — rotate the credential. That is t
 one rule worth reading twice, because deleting the line makes the build pass and
 leaves the secret in history.
 
+## Private keys in your setup docs
+
+Documentation that shows someone how to paste a deploy key normally looks like
+this, and it is **not** a finding:
+
+```
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+... (full private key) ...
+-----END OPENSSH PRIVATE KEY-----
+```
+
+Semgrep's rule fires, correctly, on real key header bytes. What it cannot see is
+that the block stops before any private material — those leading bytes are a
+fixed format header and, at most, the public key. Neither is secret.
+
+The baseline drops these, and **prints every one it drops** with the file, line
+and the reason, in the log and in the job summary. Nothing is suppressed
+quietly.
+
+**Length is never the test.** A PKCS#8 ed25519 private key is 48 bytes — smaller
+than the 52-byte truncated header this exists to suppress — so any size
+threshold that catches the placeholder also throws away a real key. The test is
+whether the block contains a byte of the private section. It does not, or it is
+a finding.
+
+A real key with its middle elided for display is **kept**, because it still
+carries private bytes and partial key recovery is a real attack.
+
+To see raw Semgrep output instead:
+
+```yaml
+    with:
+      suppress-placeholder-keys: false
+```
+
 ## Turning parts off
 
 Each gate has a switch, and using them is better than not adopting at all:
@@ -123,6 +159,10 @@ same checks they are held to in ours.
 - **Semgrep runs community rule packs only** unless you also vendor our
   `semgrep.yml`. The workflow says so on every run rather than implying full
   coverage.
+- **The pull request gate scans the commits a pull request adds, not history.**
+  It protects you from the next secret, not the ones already committed. A
+  first-time full-history scan is a separate, deliberate exercise — and on an
+  older repository it usually finds something.
 - **Nothing here updates itself**, by design. See *Keeping it current* above — Renovate is one line, and doing neither is a choice with a cost: a scanner ages into passing because its rules are old.
 
 ## Where this came from
