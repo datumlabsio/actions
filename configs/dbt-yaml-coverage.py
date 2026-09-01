@@ -1,4 +1,4 @@
-# datum-config: dbt-yaml-coverage v1
+# datum-config: dbt-yaml-coverage v2
 # Vendored from datumlabsio/actions/configs/dbt-yaml-coverage.py. Bump it, do
 # not edit it.
 """Enforce the YAML discipline in `blocks/dbt.md` §2 against a parsed manifest.
@@ -60,12 +60,36 @@ def check(manifest_path: Path, mart_path: str) -> list[str]:
     tested = collect_tested_models(nodes)
     failures: list[str] = []
 
+    # ONLY THIS PROJECT'S MODELS. A parsed manifest contains every model of
+    # every installed package, and a package that ships models — elementary,
+    # dbt_artifacts, dbt_project_evaluator — would otherwise be audited against
+    # rules its authors never agreed to. Installing elementary on polaris put
+    # 30 package models beside 12 of its own and produced 138 failures, none of
+    # them fixable by the person who ran into them.
+    #
+    # A gate that reports code the author does not own is a gate people learn
+    # to switch off.
+    root = (manifest.get("metadata") or {}).get("project_name")
+    if not root:
+        return [
+            "Manifest has no `metadata.project_name`, so this project's models "
+            "cannot be told apart from those of installed packages. Refusing to "
+            "audit models that may not be yours."
+        ]
+
     models = {
         uid: node
         for uid, node in nodes.items()
         if node.get("resource_type") == "model"
+        and node.get("package_name") == root
     }
     if not models:
+        total = sum(1 for n in nodes.values() if n.get("resource_type") == "model")
+        if total:
+            return [
+                f"No models belong to project '{root}', though the manifest holds "
+                f"{total} from installed packages. Nothing of yours to check."
+            ]
         return ["No models found in the manifest. Did `dbt parse` run?"]
 
     for uid, node in sorted(models.items()):

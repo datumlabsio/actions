@@ -62,6 +62,22 @@ jobs:
       - name: A suppressed finding must provably carry no key
         run: python3 tests/placeholder_key_filter.py
 
+  # The YAML coverage gate audits a dbt manifest, which contains every model of
+  # every installed package. It must check only THIS project's models: elementary
+  # on polaris put 30 package models beside 12 of its own and produced 138
+  # failures, none of them fixable by the person who hit them.
+  #
+  # Half these cases exist to prove the filter did not turn the gate into a
+  # rubber stamp.
+  dbt-yaml-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Only this project's models are audited
+        run: python3 tests/dbt_yaml_coverage.py
+
   # docs-ci run against this repo, with every optional check switched on, so a
   # change to any of them is exercised here first.
   docs-ci:
