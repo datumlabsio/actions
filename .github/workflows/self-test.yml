@@ -981,25 +981,29 @@ jobs:
           d="$RUNNER_TEMP/manifests"
           mkdir -p "$d"
 
-          model='"resource_type":"model","name":"orders","original_file_path":"models/marts/orders.sql","fqn":["p","marts","orders"]'
+          # package_name and metadata.project_name are what separate this
+          # project's models from those of an installed package. Without them the
+          # gate refuses to guess, so every fixture carries both.
+          meta='"metadata":{"project_name":"p"}'
+          model='"resource_type":"model","name":"orders","package_name":"p","original_file_path":"models/marts/orders.sql","fqn":["p","marts","orders"]'
           contract='"config":{"contract":{"enforced":true}}'
           test_node='"test.p.nn":{"resource_type":"test","depends_on":{"nodes":["model.p.orders"]}}'
           cols_ok='"columns":{"order_id":{"description":"Primary key."}}'
           patch='"patch_path":"p://models/schema.yml"'
           desc='"description":"One row per order."'
 
-          printf '{"nodes":{"model.p.orders":{%s,%s,%s,%s,%s},%s}}\n' \
-            "$model" "$contract" "$patch" "$desc" "$cols_ok" "$test_node" > "$d/good.json"
-          printf '{"nodes":{"model.p.orders":{%s,%s,%s,"description":"",%s},%s}}\n' \
-            "$model" "$contract" "$patch" "$cols_ok" "$test_node" > "$d/no-description.json"
-          printf '{"nodes":{"model.p.orders":{%s,%s,%s,%s},%s}}\n' \
-            "$model" "$contract" "$desc" "$cols_ok" "$test_node" > "$d/no-yaml-entry.json"
-          printf '{"nodes":{"model.p.orders":{%s,%s,%s,%s,%s}}}\n' \
-            "$model" "$contract" "$patch" "$desc" "$cols_ok" > "$d/untested.json"
-          printf '{"nodes":{"model.p.orders":{%s,%s,%s,%s,"columns":{"order_id":{"description":""}}},%s}}\n' \
-            "$model" "$contract" "$patch" "$desc" "$test_node" > "$d/undocumented-column.json"
-          printf '{"nodes":{"model.p.orders":{%s,%s,%s,%s},%s}}\n' \
-            "$model" "$patch" "$desc" "$cols_ok" "$test_node" > "$d/no-contract.json"
+          printf '{%s,"nodes":{"model.p.orders":{%s,%s,%s,%s,%s},%s}}\n' \
+            "$meta" "$model" "$contract" "$patch" "$desc" "$cols_ok" "$test_node" > "$d/good.json"
+          printf '{%s,"nodes":{"model.p.orders":{%s,%s,%s,"description":"",%s},%s}}\n' \
+            "$meta" "$model" "$contract" "$patch" "$cols_ok" "$test_node" > "$d/no-description.json"
+          printf '{%s,"nodes":{"model.p.orders":{%s,%s,%s,%s},%s}}\n' \
+            "$meta" "$model" "$contract" "$desc" "$cols_ok" "$test_node" > "$d/no-yaml-entry.json"
+          printf '{%s,"nodes":{"model.p.orders":{%s,%s,%s,%s,%s}}}\n' \
+            "$meta" "$model" "$contract" "$patch" "$desc" "$cols_ok" > "$d/untested.json"
+          printf '{%s,"nodes":{"model.p.orders":{%s,%s,%s,%s,"columns":{"order_id":{"description":""}}},%s}}\n' \
+            "$meta" "$model" "$contract" "$patch" "$desc" "$test_node" > "$d/undocumented-column.json"
+          printf '{%s,"nodes":{"model.p.orders":{%s,%s,%s,%s},%s}}\n' \
+            "$meta" "$model" "$patch" "$desc" "$cols_ok" "$test_node" > "$d/no-contract.json"
 
           # The control first. A gate that refuses everything looks identical to a
           # working one until somebody tries to merge something legitimate.
@@ -1016,6 +1020,18 @@ jobs:
             fi
             echo "  refused: $case"
           done
+          # An installed package's models must be invisible. This is what
+          # elementary tripped on polaris: 30 package models beside 12 of its own,
+          # 138 failures, none of them the author's to fix.
+          pkg='"resource_type":"model","name":"alerts","package_name":"elementary","original_file_path":"models/edr/alerts.sql","fqn":["elementary","alerts"]'
+          printf '{%s,"nodes":{"model.p.orders":{%s,%s,%s,%s,%s},"model.elementary.alerts":{%s},%s}}\n' \
+            "$meta" "$model" "$contract" "$patch" "$desc" "$cols_ok" "$pkg" "$test_node" > "$d/with-package.json"
+          if ! python3 configs/dbt-yaml-coverage.py --manifest "$d/with-package.json" --mart-path marts; then
+            echo "::error::An installed package's undocumented models were reported. They are not the author's to fix."
+            exit 1
+          fi
+          echo "  package models ignored, own models still checked."
+
           echo "Every rule in dbt.md §2 was watched refusing."
 
       - name: commit-lint refuses a title that is not a Conventional Commit
