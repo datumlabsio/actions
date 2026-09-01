@@ -209,6 +209,53 @@ jobs:
       # Checked here rather than trusted, because the failure mode is silent:
       # a moved tag makes every pinned caller receive different code without
       # anything in their repo changing.
+      # The date has to be IN the file before the tag points at it. A consumer
+      # pins an immutable tag, so anything we want that code to know later must
+      # be baked in now -- there is no second chance and no way to reach them.
+      #
+      # Pushed with GITHUB_TOKEN, which by design does not trigger another
+      # workflow run, so this cannot loop back into release-self.
+      - name: Stamp the release date into the security baseline
+        id: stamp
+        if: >-
+          steps.derive.outputs.version != '' && !inputs.dry-run &&
+          hashFiles('.github/workflows/security-baseline.yml') != ''
+        env:
+          VERSION: ${{ steps.derive.outputs.version }}
+        run: |
+          set -euo pipefail
+          f=.github/workflows/security-baseline.yml
+          today=$(date -u +%F)
+
+          before=$(grep -c 'datum-release-stamp' "$f" || true)
+          if [ "$before" -ne 1 ]; then
+            echo "::error::Expected exactly one datum-release-stamp line in $f, found $before."
+            exit 1
+          fi
+
+          python3 - "$f" "$today" <<'DATUM_STAMP'
+          import re, sys
+          path, today = sys.argv[1], sys.argv[2]
+          text = open(path).read()
+          new, n = re.subn(
+              r'(DATUM_RELEASED_ON: ")[0-9-]+(" # datum-release-stamp)',
+              rf'\g<1>{today}\g<2>', text, count=1)
+          if n != 1:
+              sys.exit(f"stamp line did not match its expected shape in {path}")
+          open(path, "w").write(new)
+          DATUM_STAMP
+
+          # Assert on the file, not on the exit code of the thing that wrote it.
+          grep -q "DATUM_RELEASED_ON: \"$today\" # datum-release-stamp" "$f" \
+            || { echo "::error::Stamp did not land in $f."; exit 1; }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$f"
+          git commit -q -m "chore: stamp $VERSION released $today"
+          git push origin HEAD:"${GITHUB_REF_NAME}"
+          echo "Stamped $today and pushed; the tag below will include it."
+
       - name: Tag, without ever moving one
         id: tag
         if: steps.derive.outputs.version != '' && !inputs.dry-run

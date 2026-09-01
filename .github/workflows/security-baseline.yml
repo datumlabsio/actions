@@ -82,9 +82,108 @@ on:
 permissions:
   contents: read
 
+# STAMPED BY release.yml WHEN A TAG IS CUT. Do not edit by hand.
+#
+# 0000-00-00 is the working-copy value and means "not a release". A branch must
+# never expire, or this repository's own CI would rot after a year.
+env:
+  DATUM_RELEASED_ON: "0000-00-00" # datum-release-stamp
+  DATUM_MAX_AGE_DAYS: "365"
+
 jobs:
+  # A PINNED SECURITY SCANNER AGES INTO FALSE ASSURANCE. It goes green because
+  # its rules are old, not because the code is clean -- and the repository most
+  # likely to be running a two-year-old pin is one nobody maintains any more.
+  #
+  # So a release stops scanning after a year and says so, loudly, on every run.
+  # It PASSES rather than fails: breaking the build of a repository we no longer
+  # work on is not ours to do, and a warning on every pull request is what
+  # actually gets the file deleted -- by the people who can delete it.
+  #
+  # No network call. The date travels inside the file they already pinned.
+  age:
+    runs-on: ubuntu-latest
+    outputs:
+      expired: ${{ steps.check.outputs.expired }}
+    steps:
+      - name: Is this release still maintained?
+        id: check
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/age.py" <<'DATUM_AGE_CHECK'
+          """Decide whether this release of the baseline is too old to be trusted.
+
+          Prints `expired=true|false` and a reason. NEVER raises: an unreadable stamp
+          must not be the reason a security gate stops scanning.
+          """
+          import datetime
+          import os
+          import sys
+
+          UNSTAMPED = "0000-00-00"
+
+
+          def decide(released_on: str, max_age_days: int, today: datetime.date):
+              # The unstamped value is carried on main and every branch. A working copy is
+              # not a release and must never expire, or our own CI rots after a year.
+              if released_on == UNSTAMPED:
+                  return False, "unstamped — not a release build"
+              try:
+                  released = datetime.date.fromisoformat(released_on)
+              except ValueError:
+                  # FAIL OPEN. A stamp we cannot read is a bug in our release process,
+                  # not a reason to stop scanning the caller's code.
+                  return False, f"stamp {released_on!r} is unreadable — kept scanning"
+              if released > today:
+                  # Clock skew, or a stamp from the future. Also fail open.
+                  return False, f"released {released_on}, which is in the future — kept scanning"
+              age = (today - released).days
+              if age > max_age_days:
+                  return True, f"released {released_on}, {age} days ago"
+              return False, f"released {released_on}, {age} days ago"
+
+
+          def main() -> int:
+              expired, reason = decide(
+                  os.environ.get("RELEASED_ON", UNSTAMPED),
+                  int(os.environ.get("MAX_AGE_DAYS", "365")),
+                  datetime.datetime.now(datetime.UTC).date(),
+              )
+              print(f"expired={'true' if expired else 'false'}")
+              print(f"reason={reason}")
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          DATUM_AGE_CHECK
+          RELEASED_ON="$DATUM_RELEASED_ON" MAX_AGE_DAYS="$DATUM_MAX_AGE_DAYS" \
+            python3 "$RUNNER_TEMP/age.py" > "$RUNNER_TEMP/age.out"
+          cat "$RUNNER_TEMP/age.out" >> "$GITHUB_OUTPUT"
+
+          expired=$(grep '^expired=' "$RUNNER_TEMP/age.out" | cut -d= -f2)
+          reason=$(grep '^reason=' "$RUNNER_TEMP/age.out" | cut -d= -f2-)
+
+          if [ "$expired" = "true" ]; then
+            echo "::warning::This security baseline was $reason. It is no longer maintained and performs NO CHECKS. Update the pin to a current version, or delete this workflow file."
+            {
+              echo "### security-baseline — EXPIRED"
+              echo
+              echo "This workflow was **$reason**, past the ${DATUM_MAX_AGE_DAYS}-day limit."
+              echo
+              echo "**It scanned nothing.** A rule set this old reports green because it is"
+              echo "out of date, not because the code is clean."
+              echo
+              echo "Update the pin to a current version of"
+              echo "\`datumlabsio/actions\`, or delete this workflow file."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::notice::security-baseline: $reason."
+          fi
+
   semgrep:
-    if: ${{ inputs.semgrep }}
+    needs: age
+    if: ${{ inputs.semgrep && needs.age.outputs.expired != 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -400,7 +499,8 @@ jobs:
           fi
 
   secrets:
-    if: ${{ inputs.gitleaks }}
+    needs: age
+    if: ${{ inputs.gitleaks && needs.age.outputs.expired != 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -490,7 +590,8 @@ jobs:
           fi
 
   dependencies:
-    if: ${{ inputs.dependency-audit }}
+    needs: age
+    if: ${{ inputs.dependency-audit && needs.age.outputs.expired != 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
