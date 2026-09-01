@@ -382,6 +382,20 @@ jobs:
 
   # security-baseline against fixtures, because a scanner nobody has watched
   # refuse anything is a scanner you hope works.
+  # The reusable workflow itself, called end to end against a fixture whose only
+  # Semgrep finding is a private-key match carrying no private key. It must pass.
+  #
+  # The job above scans fixtures with Semgrep directly, which never exercises the
+  # filter or the exit-code decision that follows it. Without this, a broken
+  # filter ships green: the placeholder rule would be tested only by a unit test
+  # of a script nothing had been observed running.
+  security-baseline-placeholder-key:
+    uses: ./.github/workflows/security-baseline.yml
+    with:
+      working-directory: tests/fixtures/security-placeholder-key
+      gitleaks: false
+      dependency-audit: false
+
   security-baseline:
     runs-on: ubuntu-latest
     env:
