@@ -132,6 +132,34 @@ To see raw Semgrep output instead:
       suppress-placeholder-keys: false
 ```
 
+## It expires after a year, on purpose
+
+A pinned version never changes — which is the point, and also the problem. A
+security scanner frozen at a two-year-old rule set **reports green because its
+rules are old, not because your code is clean.** That is worse than no scanner,
+because it looks like one.
+
+So a release stops scanning **365 days after it was cut**, and says so on every
+run:
+
+```
+This security baseline was released 2026-09-01, 400 days ago. It is no
+longer maintained and performs NO CHECKS. Update the pin to a current
+version, or delete this workflow file.
+```
+
+**It passes rather than fails.** Breaking your build over our release cadence
+would not be ours to do. It goes quiet and tells you why.
+
+Two things follow from that:
+
+- **Update the pin occasionally** — a line change, and the warning goes away.
+- **If nobody is maintaining this any more, delete the file.** The warning is
+  there to make that easy to notice, not to nag indefinitely.
+
+The date travels inside the workflow you pinned. **Nothing phones home**, and
+the check works identically whether or not we are still working together.
+
 ## Turning parts off
 
 Each gate has a switch, and using them is better than not adopting at all:

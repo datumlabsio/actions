@@ -109,6 +109,19 @@ jobs:
       - name: The exemptions are scoped, and the rules still bite
         run: .sqvenv/bin/python tests/sqlfluff_config.py
 
+  # A release stops scanning after a year. Two properties matter more than the
+  # expiry: it must PASS rather than fail (breaking a former client's CI from
+  # outside is not ours to do), and it must FAIL OPEN (an unreadable stamp is a
+  # bug in our release process, never a reason to stop scanning their code).
+  release-expiry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Expiry passes, never fails, and fails open
+        run: python3 tests/release_expiry.py
+
   # docs-ci run against this repo, with every optional check switched on, so a
   # change to any of them is exercised here first.
   docs-ci:
