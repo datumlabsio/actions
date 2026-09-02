@@ -66,6 +66,20 @@ on:
         type: boolean
         default: true
 
+      so-what:
+        description: >-
+          Every exposure names a decision fork, a reader and a moment .
+          Off by default: a repo opts in once its exposures carry the template.
+        type: boolean
+        default: false
+
+      one-door:
+        description: >-
+          Every exposure depends on marts only (DAS §2). Off by default: a repo
+          opts in once its dashboards are declared as exposures.
+        type: boolean
+        default: false
+
       build:
         description: "Run dbt build. Needs a reachable CI target."
         type: boolean
@@ -112,9 +126,17 @@ jobs:
         run: uv python install "${{ inputs.python-version }}"
 
       - name: Vendored configs present and stamped
+        env:
+          SO_WHAT: ${{ inputs.so-what }}
+          ONE_DOOR: ${{ inputs.one-door }}
         run: |
+          files=".sqlfluff dbt-tool-versions.txt dbt-yaml-coverage.py"
+          # A gate's script is required only when that gate is on. Turning a gate
+          # on is therefore the only thing that can newly fail this step.
+          if [ "$SO_WHAT" = "true" ]; then files="$files check_so_what.py"; fi
+          if [ "$ONE_DOOR" = "true" ]; then files="$files check_one_door.py"; fi
           missing=0
-          for f in .sqlfluff dbt-tool-versions.txt dbt-yaml-coverage.py; do
+          for f in $files; do
             p="$CONFIG_DIR/$f"
             if [ ! -f "$p" ]; then
               echo "::error::$p not found. It is vendored in by the scaffold — copy it from datumlabsio/actions/configs/."
@@ -181,6 +203,19 @@ jobs:
             --manifest target/manifest.json \
             --mart-path "${{ inputs.mart-path }}"
 
+      - name: So-what gate
+        if: inputs.so-what
+        run: |
+          .venv/bin/python "$CONFIG_DIR/check_so_what.py" \
+            --manifest target/manifest.json
+
+      - name: One door up
+        if: inputs.one-door
+        run: |
+          .venv/bin/python "$CONFIG_DIR/check_one_door.py" \
+            --manifest target/manifest.json \
+            --mart-path "${{ inputs.mart-path }}"
+
       - name: SQL lint
         if: inputs.lint
         run: .venv/bin/sqlfluff lint models/
@@ -213,6 +248,8 @@ jobs:
           REQUESTED: >-
             sqlfluff:${{ inputs.lint }}
             yaml-coverage:${{ inputs.yaml-coverage }}
+            so-what:${{ inputs.so-what }}
+            one-door:${{ inputs.one-door }}
             dbt-build:${{ inputs.build }}
             artifacts:${{ inputs.upload-artifacts }}
         run: |

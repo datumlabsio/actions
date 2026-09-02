@@ -37,6 +37,12 @@ on:
       yaml-coverage:
         type: boolean
         default: true
+      so-what:
+        type: boolean
+        default: false
+      one-door:
+        type: boolean
+        default: false
       build:
         type: boolean
         default: true
@@ -76,6 +82,8 @@ jobs:
       mart-path: ${{ inputs.mart-path }}
       lint: ${{ inputs.lint }}
       yaml-coverage: ${{ inputs.yaml-coverage }}
+      so-what: ${{ inputs.so-what }}
+      one-door: ${{ inputs.one-door }}
       build: ${{ inputs.build }}
       upload-artifacts: ${{ inputs.upload-artifacts }}
     secrets:

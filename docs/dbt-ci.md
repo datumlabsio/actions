@@ -33,6 +33,8 @@ jobs:
 | `mart-path` | string | `"marts"` | Path segment identifying marts, for the contract check. |
 | `lint` | boolean | `true` | `sqlfluff lint models/`. |
 | `yaml-coverage` | boolean | `true` | Documentation and test coverage. |
+| `so-what` | boolean | `false` | Every exposure names a decision fork, a reader and a moment (DAS §1). |
+| `one-door` | boolean | `false` | Every exposure depends on marts only (DAS §2). |
 | `build` | boolean | `true` | `dbt build`. |
 | `upload-artifacts` | boolean | `true` | Keep `manifest.json` and `run_results.json`. |
 
@@ -46,7 +48,7 @@ jobs:
 
 ## What the stages check
 
-**Vendored configs present and stamped.** `.sqlfluff`, `dbt-tool-versions.txt` and `dbt-yaml-coverage.py` must exist and carry a `# datum-config:` stamp. Fails first, with a message saying where they come from, rather than surfacing later as a confusing "config not found".
+**Vendored configs present and stamped.** `.sqlfluff`, `dbt-tool-versions.txt` and `dbt-yaml-coverage.py` must exist and carry a `# datum-config:` stamp — plus `check_so_what.py` and `check_one_door.py`, but only when those gates are switched on, so turning a gate on is the only thing that can newly fail this step. Fails first, with a message saying where they come from, rather than surfacing later as a confusing "config not found".
 
 **Warehouse adapter declared.** The adapter differs per install — `dbt-bigquery`, `dbt-clickhouse`, `dbt-duckdb` — so it is the repo's business, not part of the shared pins. `dbt-tool-versions.txt` pins `dbt-core` and `sqlfluff` only.
 
@@ -60,6 +62,12 @@ jobs:
 
 What it cannot check: whether every column that actually exists in the warehouse is documented. That needs `catalog.json` from `dbt docs generate`, which needs a live connection. This checks every column the YAML declares.
 
+**So-what gate** (`so-what`, off by default). Reads the same manifest and enforces DAS §1: every exposure description names a **DECISION** that is a fork between options, a **WHO** who reads it, and a **WHEN** they read it. "Revenue visibility" is a topic, not a decision, and fails. An exposure with no owner email fails too — an unowned dashboard is not a decision surface.
+
+**One door up** (`one-door`, off by default). Enforces DAS §2 on the declared graph: every exposure's `depends_on` must resolve to a mart. An exposure reading a source, a staging model or an intermediate model fails.
+
+What it cannot check: SQL an analyst types straight into the BI tool, which never reaches the manifest. That half is enforced in the warehouse — the BI service account is granted select on the mart schema only (DES §4). The check and the grant are belt and suspenders; neither replaces the other.
+
 **SQL lint.** `sqlfluff lint models/` against the shared config, using the dbt templater so `ref()` and `source()` resolve.
 
 **dbt build.** Models and tests together. `blocks/dbt.md` §6 makes this a merge gate.
@@ -72,6 +80,8 @@ What it cannot check: whether every column that actually exists in the warehouse
 dbt deps
 dbt parse --no-partial-parse
 python dbt-yaml-coverage.py --manifest target/manifest.json
+python check_so_what.py  --manifest target/manifest.json   # if so-what is on
+python check_one_door.py --manifest target/manifest.json   # if one-door is on
 sqlfluff lint models/
 dbt build
 ```
