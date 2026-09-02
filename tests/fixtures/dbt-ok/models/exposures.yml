@@ -1,0 +1,21 @@
+version: 2
+
+# The fixture declares one exposure so `so-what` and `one-door` are exercised
+# against a real parsed manifest, not a synthetic one. It reads the mart and
+# nothing else, and its description carries the DAS §1 template.
+exposures:
+  - name: orders_review
+    label: "Orders Review"
+    type: dashboard
+    maturity: medium
+    url: https://bi.example.internal/d/orders
+    owner:
+      name: Fixture Owner
+      email: fixture@datumlabs.io
+    depends_on:
+      - ref('fct_orders')
+    description: >
+      DECISION: whether to hold the current fulfilment SLA or tighten it to
+      next-day.
+      WHO: the operations lead.
+      WHEN: at the weekly operations review.

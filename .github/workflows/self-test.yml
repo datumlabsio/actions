@@ -78,6 +78,21 @@ jobs:
       - name: Only this project's models are audited
         run: python3 tests/dbt_yaml_coverage.py
 
+  # Both gates ship OFF, so nothing in the fleet exercises them by default. The
+  # unit cases run here regardless, and half of them prove the gate still refuses
+  # -- a dashboard wired to staging, and a DECISION that is only a topic.
+  analytics-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: An exposure must name a decision fork
+        run: python3 tests/check_so_what.py
+
+      - name: An exposure must read marts only
+        run: python3 tests/check_one_door.py
+
   # sqlfluff FIXES code, so a misfiring rule does not report a false positive --
   # it edits the file and the damage ships. CP03 lowercased ClickHouse's
   # case-sensitive toDateTime on polaris, which CI could not catch because those
@@ -153,6 +168,11 @@ jobs:
     uses: ./.github/workflows/dbt-ci.yml
     with:
       working-directory: tests/fixtures/dbt-ok
+      # These two ship OFF so no install gains a gate it did not ask for. They
+      # are turned on HERE so the fixture proves they work against a real
+      # manifest — a gate that never runs anywhere is not a gate.
+      so-what: true
+      one-door: true
 
   # commit-lint against this pull request's own title. It runs on the real thing
   # rather than a fixture, which is the only way to know the event wiring works.
