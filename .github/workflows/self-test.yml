@@ -5,7 +5,17 @@ name: self-test
 # breaks the whole fleet's CI at once, not one repo's.
 
 on:
+  # `edited` is here for one reason: the title check reads the title out of the
+  # event payload, and a re-run replays the ORIGINAL payload. So correcting an
+  # unconventional title left the check red, showing the old title, with nothing
+  # saying why -- and the only way to clear it was an unrelated push. It looked
+  # like a broken gate, which is how people learn to ignore gates.
+  #
+  # It re-runs the whole suite on a description edit too. Free here: this
+  # repository is public, so Actions minutes cost nothing. Do NOT copy this into
+  # a private repo's caller without deciding that trade first.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
