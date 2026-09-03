@@ -89,7 +89,25 @@ def failures(exposure: dict) -> list[str]:
 
 
 def audit(manifest: dict) -> list[tuple[str, list[str]]]:
-    project = manifest.get("metadata", {}).get("project_name")
+    project = (manifest.get("metadata") or {}).get("project_name")
+    # Refusing rather than guessing. Without project_name this project's exposures
+    # cannot be told apart from an installed package's, and the package filter
+    # below would then discard EVERY exposure -- reporting "all 0 exposure(s)"
+    # and exiting 0 on a manifest it never read. dbt-yaml-coverage.py refuses on
+    # the same input; these gates are opt-in, so the repo that hits this is one
+    # that switched them on and believes it is covered.
+    if not project:
+        return [
+            (
+                "<manifest>",
+                [
+                    "manifest has no `metadata.project_name`, so this project's "
+                    "exposures cannot be told apart from an installed package's. "
+                    "Refusing to audit exposures that may not be yours."
+                ],
+            )
+        ]
+
     bad: list[tuple[str, list[str]]] = []
     for exposure in manifest.get("exposures", {}).values():
         if exposure.get("package_name") != project:

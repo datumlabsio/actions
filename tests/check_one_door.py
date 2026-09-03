@@ -75,6 +75,16 @@ def main() -> int:
           ["model.fixture.fct_orders", "model.fixture.stg_orders"], 1)
     check("declaring nothing fails -- an exposure must name what it reads", [], 1)
 
+    # --- refusing rather than guessing ----------------------------------------
+    # Without project_name the package filter discards every exposure, so the gate
+    # would report "all 0 exposure(s) read marts only" and exit 0 having read
+    # nothing. dbt-yaml-coverage.py refuses on the same input.
+    check("a null project_name REFUSES", ["model.fixture.fct_orders"], 1, project=None)
+
+    stripped = manifest(["model.fixture.fct_orders"])
+    del stripped["metadata"]
+    cases.append(("no metadata key at all REFUSES", gate.audit(stripped, "marts"), 1))
+
     failures = []
     for name, got, want in cases:
         good = len(got) == want

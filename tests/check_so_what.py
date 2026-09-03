@@ -74,6 +74,23 @@ def main() -> int:
     check("an installed package's exposure is invisible",
           exposure("DECISION: nothing.", pkg="elementary"), 0)
 
+    # --- refusing rather than guessing ----------------------------------------
+    # Without project_name the package filter discards every exposure, so the
+    # gate would report "all 0 exposure(s)" and exit 0 on a manifest it never
+    # read. A green run that examined nothing is the worst outcome available,
+    # and worse here than elsewhere: this gate is opt-in, so the repo that hits
+    # it switched it on and believes it is covered.
+    cases.append((
+        "a manifest with no project_name REFUSES",
+        gate.audit({"metadata": {}, "exposures": {"exposure.fixture.e": exposure()}}),
+        1,
+    ))
+    cases.append((
+        "no metadata key at all REFUSES",
+        gate.audit({"exposures": {"exposure.fixture.e": exposure()}}),
+        1,
+    ))
+
     failures = []
     for name, got, want in cases:
         good = len(got) == want
