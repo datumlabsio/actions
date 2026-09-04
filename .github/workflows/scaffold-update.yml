@@ -65,17 +65,28 @@ jobs:
         id: creds
         env:
           APP_ID: ${{ secrets.app-id }}
+          # A person asked for this run. The schedule did not.
+          ASKED_FOR: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
           # An organisation secret scoped to selected repositories arrives here as
           # an empty string rather than an error. Without this check the run fails
           # weekly on a token step, in every repo that was never granted the
           # secret, and the noise trains people to ignore it.
-          if [ -z "${APP_ID:-}" ]; then
-            echo "::notice::No App credentials in this repository, so nothing ran. Grant it the datum-police secrets to switch this on (B-06)."
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          else
+          #
+          # That reasoning holds for the SCHEDULE. It does not hold for a person.
+          # A manual run that reports success and does nothing answers "did the
+          # update work?" with a green tick -- dl-assessment-platform sat unable
+          # to receive template updates while a hand-triggered run said it was fine.
+          if [ -n "${APP_ID:-}" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
+          elif [ "$ASKED_FOR" = "true" ]; then
+            echo "::error::No App credentials in this repository, so NOTHING RAN and no pull request was opened."
+            echo "::error::Add this repository to the scope of the datum-police secrets: https://github.com/organizations/${GITHUB_REPOSITORY%%/*}/settings/secrets/actions"
+            exit 1
+          else
+            echo "::warning::No App credentials in this repository, so nothing ran. It cannot receive scaffold updates until the datum-police secrets include it (B-06)."
+            echo "present=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Mint a token for the run
