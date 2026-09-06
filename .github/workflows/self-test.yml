@@ -57,6 +57,13 @@ jobs:
       - name: No hardcoded accounts, hosts, addresses or client names
         run: python3 tests/no_literal_env_values.py .github/workflows
 
+      # The ban is inlined in workflows-ci because a reusable workflow only
+      # checks out the CALLER's repository. The test extracts it from there
+      # rather than keeping a second copy, which would drift into testing
+      # something the workflow does not run.
+      - name: The pull_request_target ban catches it, and does not cry wolf
+        run: python3 tests/test_no_pull_request_target.py
+
   # The placeholder-key filter DROPS security findings, so it is tested by
   # extracting the script security-baseline.yml actually ships, rather than a
   # copy kept beside it. Real keys of four formats are generated at run time and

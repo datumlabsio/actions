@@ -93,6 +93,89 @@ jobs:
           ./actionlint
           echo "All workflows lint clean."
 
+      # actionlint does not flag this: it is valid YAML and a valid trigger.
+      #
+      # A fork's pull request normally runs with a READ-ONLY token and no
+      # secrets -- that is the protection. `pull_request_target` runs in the
+      # BASE repository's context instead, so checking out the fork's code
+      # executes somebody else's script with a writable token and every secret
+      # in the repository.
+      #
+      # It looks like the fix for a real limitation, it works, and review does
+      # not catch it unless the reviewer knows this specific trap. `actions` and
+      # `.github` are PUBLIC -- anyone can open a pull request on them, and
+      # `.github` is where the datum-police credentials are reachable.
+      - name: No workflow triggers on pull_request_target
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PRT_CHECK'
+          import re, sys
+          from pathlib import Path
+
+          TRIGGER = "pull_request_target"
+          WF = Path(".github/workflows")
+          if not WF.is_dir():
+              print("::notice::No .github/workflows directory. Nothing to check.")
+              sys.exit(0)
+
+
+          def offending(text):
+              """Lines that TRIGGER on it, ignoring comments and prose.
+
+              A check that flags its own documentation is one people delete, so
+              only the `on:` block counts and comments never do.
+              """
+              out, in_on = [], False
+              for n, raw in enumerate(text.split("\n"), 1):
+                  line = "" if raw.lstrip().startswith("#") else raw.split("#", 1)[0]
+                  if not line.strip():
+                      continue
+                  if re.match(r"^on\s*:", line):
+                      in_on = True
+                      if TRIGGER in line:
+                          out.append((n, raw.strip()))
+                      continue
+                  if in_on and re.match(r"^\S", line):
+                      in_on = False
+                  if in_on and TRIGGER in line:
+                      out.append((n, raw.strip()))
+              return out
+
+
+          found, checked = [], 0
+          for f in sorted(list(WF.glob("*.yml")) + list(WF.glob("*.yaml"))):
+              checked += 1
+              for n, line in offending(f.read_text(encoding="utf-8", errors="replace")):
+                  found.append((f, n, line))
+
+          if not found:
+              print(f"No workflow triggers on {TRIGGER}. Checked {checked}.")
+              sys.exit(0)
+
+          for f, n, line in found:
+              print(f"::error file={f},line={n}::{TRIGGER} gives a fork's pull "
+                    "request a writable token and every secret in this repository. "
+                    "Anyone can open a pull request on a public repo.")
+              print(f"  {f}:{n}  {line}")
+          print("""
+            Instead, depending on what you were trying to do:
+
+              comment on or label a fork's pull request
+                -> a separate workflow on `workflow_run`, which gets a writable
+                   token WITHOUT ever checking out the fork's code
+
+              read the fork's code
+                -> `on: pull_request`. Read-only, no secrets -- correct, because
+                   it is somebody else's code
+
+              a check that genuinely needs secrets against a fork
+                -> it needs a human. Use an environment with required reviewers,
+                   so somebody approves before the code runs
+          """)
+          sys.exit(1)
+          PRT_CHECK
+
   pins:
     if: ${{ inputs.verify-pins }}
     runs-on: ubuntu-latest
