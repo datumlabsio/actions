@@ -18,12 +18,35 @@ set -euo pipefail
 : "${RUNNER_GROUP:?set RUNNER_GROUP -- the group scoped to PRIVATE repos only}"
 : "${RUNNER_LABELS:=self-hosted,linux,x64,datum}"
 : "${RUNNER_DIR:=/opt/actions-runner}"
-: "${GH_TOKEN:?set GH_TOKEN -- a token that can create runner registration tokens}"
+# Registration goes through the datum-runner App, not a PAT.
+#
+# A PAT on disk IS the credential -- read the file, use it. It also belongs to a
+# PERSON: when they leave or rotate it, every runner silently stops registering.
+# The App's key needs a signed JWT exchange first, the token it yields lasts an
+# hour, and the App holds `organization_self_hosted_runners: write` and nothing
+# else -- it cannot read a repository, push, or see a secret.
+#
+# GH_TOKEN is still honoured so a PAT works while the App is being set up. It
+# warns, because "temporary" credentials are the ones that stay.
+: "${APP_ID:=}"
+: "${APP_PRIVATE_KEY_PATH:=}"
+: "${GH_TOKEN:=}"
+
+if [ -n "$APP_ID" ] && [ -n "$APP_PRIVATE_KEY_PATH" ]; then
+  GH_TOKEN=$(APP_ID="$APP_ID" APP_PRIVATE_KEY_PATH="$APP_PRIVATE_KEY_PATH" \
+             RUNNER_ORG="$RUNNER_ORG" python3 "${RUNNER_DIR}/app-token.py")
+elif [ -n "$GH_TOKEN" ]; then
+  echo "::warning::Registering with a PAT. Move to the datum-runner App: a PAT is a long-lived credential tied to a person."
+else
+  echo "Set APP_ID and APP_PRIVATE_KEY_PATH (preferred), or GH_TOKEN." >&2
+  exit 1
+fi
 
 cd "$RUNNER_DIR"
 
 # A registration token is single-use and expires in an hour, which is why this
-# is fetched per job rather than stored anywhere.
+# is fetched per job rather than stored anywhere. The token authorising THIS
+# call is itself an hour-long installation token, minted a moment ago.
 TOKEN=$(curl -sS --fail -X POST \
   -H "Authorization: Bearer ${GH_TOKEN}" \
   -H "Accept: application/vnd.github+json" \

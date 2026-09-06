@@ -88,6 +88,27 @@ check("the runbook says container builds stay off this box",
       "Container jobs stay on GitHub-hosted" in doc,
       "100 GB and image layers do not coexist")
 
+# --- credentials ----------------------------------------------------------
+apptok = code_only((R / "app-token.py").read_text())
+
+check("the App path is preferred over a PAT",
+      "APP_PRIVATE_KEY_PATH" in run and "app-token.py" in run,
+      "a PAT on disk IS the credential, and it belongs to a person")
+check("a PAT still works, but warns",
+      "::warning::" in run and "GH_TOKEN" in run,
+      "blocking the fallback outright strands anyone mid-setup")
+check("with no credential at all it refuses rather than guessing",
+      "exit 1" in run)
+check("the JWT is short-lived",
+      '"exp": now + 540' in apptok,
+      "a long-lived assertion is a long-lived credential")
+check("clock skew is absorbed",
+      '"iat": now - 60' in apptok,
+      "a fast clock makes every token 'issued in the future' and rejected")
+check("errors never echo the JWT or the key path",
+      "Never print the JWT" in (R / "app-token.py").read_text(),
+      "service logs are easier to read than /etc")
+
 # --- and the units must not run it as root ---------------------------------
 check("the service does not run as root",
       "User=runner" in unit and "User=root" not in unit)
