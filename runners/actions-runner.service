@@ -1,0 +1,32 @@
+# One job, then exit. systemd restarts us and run-ephemeral.sh registers afresh.
+#
+# Restart=always is what makes the ephemeral loop work: the runner is SUPPOSED
+# to exit after every job, so an exit is success, not a fault.
+[Unit]
+Description=GitHub Actions ephemeral runner
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=runner
+Group=runner
+WorkingDirectory=/opt/actions-runner
+EnvironmentFile=/etc/actions-runner.env
+ExecStart=/opt/actions-runner/run-ephemeral.sh
+Restart=always
+RestartSec=5
+
+# The runner executes dependency installs from npm and PyPI. It should not be
+# able to reach anything on this box that it does not need.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/actions-runner
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

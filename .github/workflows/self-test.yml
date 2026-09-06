@@ -64,6 +64,11 @@ jobs:
       - name: The pull_request_target ban catches it, and does not cry wolf
         run: python3 tests/test_no_pull_request_target.py
 
+      # Three properties make a self-hosted runner safe, and all three fail
+      # SILENTLY -- the runner keeps working and the property is gone.
+      - name: The runner setup keeps its safety properties
+        run: python3 tests/runner_setup.py
+
   # The placeholder-key filter DROPS security findings, so it is tested by
   # extracting the script security-baseline.yml actually ships, rather than a
   # copy kept beside it. Real keys of four formats are generated at run time and

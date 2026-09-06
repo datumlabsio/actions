@@ -1,0 +1,7 @@
+[Unit]
+Description=Reclaim runner disk
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/actions-runner.env
+ExecStart=/opt/actions-runner/reclaim-disk.sh
