@@ -42,6 +42,19 @@ That is the whole file. If a repo's CI has steps of its own, something has gone 
 | `workflows-ci.yml` | a repo's own automation: actionlint, pins resolve, Renovate config valid | [docs/workflows-ci.md](docs/workflows-ci.md) |
 | `web-ci.yml` | any JS/TS surface — pnpm, Biome, tsc, Vitest with coverage | [docs/web-ci.md](docs/web-ci.md) |
 
+## Adopting a repository we do not own
+
+`datumlabsio/actions` is public, so any repository in any organisation can call
+it. Two pages, and they are for different readers:
+
+| Page | Reader |
+|---|---|
+| [docs/adopting-security-baseline.md](docs/adopting-security-baseline.md) | the client team — one file, what it does, what it does not |
+| [docs/adopting-a-repo-we-do-not-own.md](docs/adopting-a-repo-we-do-not-own.md) | the Datum engineer doing it — the checklist, and the register of who has adopted |
+
+No app is installed in their organisation and no credential is exchanged. If a
+step seems to need one, that is a decision rather than a step.
+
 Archetype workflows are the surface a repo actually calls — a caller names its archetype and nothing else. See [docs/archetypes.md](docs/archetypes.md) for which exist and which are still waiting on the workflows they depend on.
 
 | Archetype | Workflow |
