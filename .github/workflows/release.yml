@@ -204,75 +204,23 @@ jobs:
             fi
           } > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
-
-      # A published version is never changed and a tag is never moved (DES §10).
-      # Checked here rather than trusted, because the failure mode is silent:
-      # a moved tag makes every pinned caller receive different code without
-      # anything in their repo changing.
-      # The date has to be IN the file before the tag points at it. A consumer
-      # pins an immutable tag, so anything we want that code to know later must
-      # be baked in now -- there is no second chance and no way to reach them.
+      # The release date used to be stamped into security-baseline.yml here, so
+      # a release could know its own age and stop scanning after a year.
       #
-      # Pushed with GITHUB_TOKEN, which by design does not trigger another
-      # workflow run, so this cannot loop back into release-self.
-      - name: Stamp the release date into the security baseline
-        id: stamp
-        if: >-
-          steps.derive.outputs.version != '' && !inputs.dry-run &&
-          hashFiles('.github/workflows/security-baseline.yml') != ''
-        env:
-          VERSION: ${{ steps.derive.outputs.version }}
-        run: |
-          set -euo pipefail
-          f=.github/workflows/security-baseline.yml
-          today=$(date -u +%F)
-
-          before=$(grep -c 'datum-release-stamp' "$f" || true)
-          if [ "$before" -ne 1 ]; then
-            echo "::error::Expected exactly one datum-release-stamp line in $f, found $before."
-            exit 1
-          fi
-
-          python3 - "$f" "$today" <<'DATUM_STAMP'
-          import re, sys
-          path, today = sys.argv[1], sys.argv[2]
-          text = open(path).read()
-          new, n = re.subn(
-              r'(DATUM_RELEASED_ON: ")[0-9-]+(" # datum-release-stamp)',
-              rf'\g<1>{today}\g<2>', text, count=1)
-          if n != 1:
-              sys.exit(f"stamp line did not match its expected shape in {path}")
-          open(path, "w").write(new)
-          DATUM_STAMP
-
-          # Assert on the file, not on the exit code of the thing that wrote it.
-          grep -q "DATUM_RELEASED_ON: \"$today\" # datum-release-stamp" "$f" \
-            || { echo "::error::Stamp did not land in $f."; exit 1; }
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$f"
-          git commit -q -m "chore: stamp $VERSION released $today"
-
-          # COMMITTED, NOT PUSHED TO A BRANCH. The tag below points at this
-          # commit; nothing pushes it to main.
-          #
-          # The first version of this pushed to main and every release since
-          # 2026-09-03 failed, silently, for two reasons at once:
-          #
-          #   Changes must be made through a pull request.
-          #   refusing to allow a GitHub App to create or update workflow
-          #   `security-baseline.yml` without `workflows` permission
-          #
-          # main is protected -- CLAUDE.md says so in bold -- and a release
-          # cannot push to it. Widening the token or bypassing the ruleset to
-          # make that work would trade branch protection for a date stamp.
-          #
-          # It is also the wrong shape. main SHIPS UNSTAMPED on purpose, and a
-          # test asserts it: 0000-00-00 means "not a release", so a working copy
-          # never expires. Only the tag should carry a date, and a tag does not
-          # need to be on a branch to exist.
-          echo "Stamped $today on $(git rev-parse --short HEAD); the tag below points here."
+      # It cannot be done with GITHUB_TOKEN. That token may not introduce ANY
+      # object that modifies a workflow file -- branch OR tag -- and the
+      # `workflows` permission cannot be granted to it:
+      #
+      #   refusing to allow a GitHub App to create or update workflow
+      #   `.github/workflows/security-baseline.yml` without `workflows` permission
+      #
+      # Two attempts, and six releases failed silently over four days while the
+      # pull_request_target ban, the runner setup and the conformance report sat
+      # on main reachable by nobody. A nice-to-have blocked everything real.
+      #
+      # The expiry is not abandoned -- see B-77. Deriving the age at runtime from
+      # github.job_workflow_sha needs no stamping and no release coupling, which
+      # is the direction to take when it comes back.
 
       - name: Tag, without ever moving one
         id: tag
