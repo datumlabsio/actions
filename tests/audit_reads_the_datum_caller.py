@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location(
@@ -58,13 +60,16 @@ jobs:
 """.strip()
 
 
-def stub(files: dict[str, str], latest: str | None = CURRENT):
+def stub(files: dict[str, str], latest: str | None = CURRENT,
+         rules_forbidden: bool = False):
     """Serve `files`; everything else absent. Settings all pass, so a finding
     that appears is attributable to the caller logic and nothing else."""
     ca.file_text = lambda repo, path: files.get(path)
 
     def api(path: str, **kw):
         if path.endswith("/rules/branches/main"):
+            if rules_forbidden:
+                return ca.FORBIDDEN
             return [{"type": t} for t in ("pull_request", "deletion", "non_fast_forward")]
         if "/teams/" in path:
             return {"permissions": {"push": True}}
@@ -134,10 +139,66 @@ def main() -> int:
     check("an unreadable release list reports no stale pin",
           r.failed == [], f"failed the repo on our own API error: {r.failed}")
 
+    # --- 403 is not 404 --------------------------------------------------
+    #
+    # The rules endpoint answers 403 on any repository we do not administer,
+    # which is every repository in a client's organisation. `api` re-raised
+    # anything that was not 404, so ONE external repo aborted the whole run and
+    # took every internal report with it -- verified against
+    # EmberAssetManagement/ecp-frontend, which died on an uncaught HTTPError.
+    r = stub(base(**{".github/workflows/datum-ci.yml": GOOD_CALLER % CURRENT}),
+             rules_forbidden=True)
+    check("a 403 on the rules endpoint does not raise", True)
+    check("403 is reported against branch protection", ca.PROTECTION in r.failed)
+    detail = " ".join(r.detail)
+    check("403 reads as unverified, NOT as missing",
+          "Unverified, not missing" in detail and "is missing:" not in detail,
+          f"claimed absence it never checked: {detail}")
+
+    # A 403 must not become a second, invented finding somewhere else.
+    check("403 costs exactly one finding", r.failed == [ca.PROTECTION],
+          f"{r.failed}")
+
+    # --- and the mapping itself, through api() ---------------------------
+    #
+    # The cases above stub `api` and so assert only what happens DOWNSTREAM of
+    # the status code. Collapsing 403 into `return None` passed all of them.
+    # This drives the real function, because the bug being fixed was an
+    # uncaught HTTPError inside it.
+    def raises(code: int):
+        def urlopen(req, timeout=None):
+            raise urllib.error.HTTPError(
+                "https://api.github.com/x", code, "nope", {}, None)
+        return urlopen
+
+    real_api = ca.api  # the stubs above replaced it
+    spec.loader.exec_module(ca)          # restore the module's own api()
+    saved = urllib.request.urlopen
+    try:
+        urllib.request.urlopen = raises(403)
+        check("api() maps 403 to FORBIDDEN, not to None",
+              ca.api("/x") is ca.FORBIDDEN,
+              "a 403 that returns None makes every unreadable check read as absent")
+
+        urllib.request.urlopen = raises(404)
+        check("api() still maps 404 to None", ca.api("/x") is None)
+
+        urllib.request.urlopen = raises(500)
+        try:
+            ca.api("/x")
+            check("api() still raises on a real error", False,
+                  "a 500 was swallowed — the audit would report on nothing")
+        except urllib.error.HTTPError:
+            check("api() still raises on a real error", True)
+    finally:
+        urllib.request.urlopen = saved
+        ca.api = real_api
+
     if FAILURES:
         print(f"\nFAIL: {len(FAILURES)} case(s): {', '.join(FAILURES)}")
         return 1
-    print("\nOK: 9 cases — the caller we ship, and the version it pins")
+    print("\nOK: 16 cases — the caller we ship, the version it pins, "
+          "and the difference between may-not-look and not-there")
     return 0
 
 

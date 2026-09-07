@@ -36,6 +36,10 @@ import yaml
 from dataclasses import dataclass, field
 
 API = "https://api.github.com"
+
+# Returned when the API says 403. Distinct from None (absent) on purpose: a
+# check that cannot see its subject must report "unverified", never "missing".
+FORBIDDEN = object()
 TOKEN = os.environ.get("GH_TOKEN", "")
 CANONICAL_REF = os.environ.get("CANONICAL_REF", "main")
 
@@ -76,12 +80,20 @@ def api(path: str, *, raw: bool = False, accept: str = "application/vnd.github+j
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return None
+        # 403 is NOT 404. "I may not look" and "it is not there" are different
+        # facts, and collapsing them makes the audit assert absence it never
+        # checked. The rules endpoint answers 403 on any repository we do not
+        # administer -- every repository in a client's organisation -- and this
+        # used to raise, so one external repo aborted the whole run and took
+        # every internal report with it.
+        if e.code == 403:
+            return FORBIDDEN
         raise
 
 
 def file_text(repo: str, path: str) -> str | None:
     d = api(f"/repos/{repo}/contents/{path}")
-    if not d or "content" not in d:
+    if d is FORBIDDEN or not d or "content" not in d:
         return None
     import base64
 
@@ -116,13 +128,14 @@ def latest_release() -> str | None:
     global _LATEST
     if _LATEST is _UNSET:
         rel = api("/repos/datumlabsio/actions/releases/latest")
-        _LATEST = (rel or {}).get("tag_name") or None
+        _LATEST = None if rel is FORBIDDEN else ((rel or {}).get("tag_name") or None)
     return _LATEST  # type: ignore[return-value]
 
 
 def canonical_stamps() -> dict[str, str]:
     """The `# datum-config:` line each vendored config should carry."""
-    listing = api(f"/repos/datumlabsio/actions/contents/configs?ref={CANONICAL_REF}") or []
+    listing = api(f"/repos/datumlabsio/actions/contents/configs?ref={CANONICAL_REF}")
+    listing = [] if listing is FORBIDDEN else (listing or [])
     out: dict[str, str] = {}
     for entry in listing:
         if entry["type"] != "file" or entry["name"] == "README.md":
@@ -140,7 +153,7 @@ def canonical_stamps() -> dict[str, str]:
 def audit(repo: str, stamps: dict[str, str]) -> Report:
     r = Report(repo=repo)
     meta = api(f"/repos/{repo}")
-    if meta is None:
+    if meta is FORBIDDEN or meta is None:
         r.fail(BORN, "repository not found, or the audit identity cannot see it")
         return r
     default_branch = meta.get("default_branch", "main")
@@ -192,6 +205,8 @@ def audit(repo: str, stamps: dict[str, str]) -> Report:
                     f"/orgs/datumlabsio/teams/{team}/repos/{repo}",
                     accept="application/vnd.github.v3.repository+json",
                 )
+                if perm is FORBIDDEN:
+                    continue        # cannot see the team's grant; do not guess
                 if perm is None:
                     r.fail(
                         FILES,
@@ -202,11 +217,21 @@ def audit(repo: str, stamps: dict[str, str]) -> Report:
                     r.fail(FILES, f"`@datumlabsio/{team}` has access but not write, so CODEOWNERS is ignored")
 
     # --- branch protection ------------------------------------------------
-    rules = api(f"/repos/{repo}/rules/branches/{default_branch}") or []
-    have = {rule["type"] for rule in rules} if isinstance(rules, list) else set()
-    want = {"pull_request", "deletion", "non_fast_forward"}
-    if not want <= have:
-        r.fail(PROTECTION, f"`{default_branch}` is missing: {', '.join(sorted(want - have))}")
+    rules = api(f"/repos/{repo}/rules/branches/{default_branch}")
+    if rules is FORBIDDEN:
+        r.fail(
+            PROTECTION,
+            f"cannot read `{default_branch}`'s rules — the audit identity does not "
+            f"administer this repository. **Unverified, not missing.** Expected on a "
+            f"repository outside our organisation, where branch protection is theirs "
+            f"to set; on one of ours it means the audit App is missing admin",
+        )
+    else:
+        rules = rules or []
+        have = {rule["type"] for rule in rules} if isinstance(rules, list) else set()
+        want = {"pull_request", "deletion", "non_fast_forward"}
+        if not want <= have:
+            r.fail(PROTECTION, f"`{default_branch}` is missing: {', '.join(sorted(want - have))}")
 
     # --- CI is a pinned thin caller ---------------------------------------
     #
@@ -288,7 +313,7 @@ def audit(repo: str, stamps: dict[str, str]) -> Report:
 
     # --- docs/ where the archetype requires it -----------------------------
     if scaffolded and r.archetype in ARCHETYPES_NEEDING_DOCS:
-        if api(f"/repos/{repo}/contents/docs") is None:
+        if api(f"/repos/{repo}/contents/docs") in (None, FORBIDDEN):
             r.fail(DOCS, f"archetype `{r.archetype}` has external consumers, so §3 requires a `docs/` folder")
 
     # --- vendored configs are current --------------------------------------
