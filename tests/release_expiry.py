@@ -147,6 +147,32 @@ def main() -> int:
     if not ok:
         failures.append("stamped file does not parse")
 
+    # The stamp step must NEVER push a branch. It did, and every release from
+    # 2026-09-03 failed silently for four days: main is protected, and an App
+    # token cannot modify a workflow file without `workflows` permission --
+    # two independent refusals, neither of which is visible unless somebody
+    # opens a release run that nobody watches.
+    #
+    # It was also the wrong shape. main ships unstamped ON PURPOSE (asserted
+    # above), so only the tag should ever carry a date, and a tag does not need
+    # to be on a branch to exist.
+    rel = RELEASE.read_text()
+    stamp_step = rel[rel.index("Stamp the release date"):rel.index("Tag, without ever moving one")]
+    code = "\n".join(l for l in stamp_step.split("\n") if not l.lstrip().startswith("#"))
+    ok = "git push" not in code
+    print(f"    [{'ok' if ok else 'FAIL'}] the stamp step pushes no branch")
+    if not ok:
+        failures.append("the stamp step pushes to a branch; main is protected and this fails silently")
+
+    # ...and the only push in the whole workflow is a tag.
+    pushes = [l.strip() for l in
+              "\n".join(l for l in rel.split("\n") if not l.lstrip().startswith("#")).split("\n")
+              if "git push" in l]
+    ok = all("refs/tags/" in p for p in pushes)
+    print(f"    [{'ok' if ok else 'FAIL'}] every push in release.yml is a tag ({len(pushes)} found)")
+    if not ok:
+        failures.append(f"release.yml pushes something other than a tag: {pushes}")
+
     if failures:
         print(f"\nFAIL: {len(failures)} case(s): {', '.join(failures)}")
         return 1
