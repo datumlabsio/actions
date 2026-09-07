@@ -93,6 +93,23 @@ jobs:
           # shellcheck disable=SC2086
           python3 tests/conformance_audit.py $REPOS
 
+      # The report covers EVERY audited repo, including the conformant ones.
+      # Issues answer "what is broken"; they cannot answer "where do we stand",
+      # because a conformant repo files nothing and looks identical to one
+      # nobody has looked at. 1 of 59 and 40 of 59 read the same in an issue
+      # list, and that difference is the whole rollout question.
+      #
+      # It is written to the run summary by the audit itself, and uploaded so it
+      # can be shared without sending somebody a link to a workflow run.
+      - name: Keep the report
+        if: ${{ always() && steps.creds.outputs.present == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: conformance-report
+          path: conformance-report.md
+          if-no-files-found: warn
+          retention-days: 90
+
       - name: File or update one issue per drifted repo
         if: ${{ steps.creds.outputs.present == 'true' && !inputs.dry-run }}
         env:

@@ -69,6 +69,10 @@ jobs:
       - name: The runner setup keeps its safety properties
         run: python3 tests/runner_setup.py
 
+      # An issue tracker cannot show coverage: a conformant repo files nothing.
+      - name: The conformance report shows where we stand, not just failures
+        run: python3 tests/conformance_report.py
+
   # The placeholder-key filter DROPS security findings, so it is tested by
   # extracting the script security-baseline.yml actually ships, rather than a
   # copy kept beside it. Real keys of four formats are generated at run time and
