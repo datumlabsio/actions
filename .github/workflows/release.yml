@@ -253,8 +253,26 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$f"
           git commit -q -m "chore: stamp $VERSION released $today"
-          git push origin HEAD:"${GITHUB_REF_NAME}"
-          echo "Stamped $today and pushed; the tag below will include it."
+
+          # COMMITTED, NOT PUSHED TO A BRANCH. The tag below points at this
+          # commit; nothing pushes it to main.
+          #
+          # The first version of this pushed to main and every release since
+          # 2026-09-03 failed, silently, for two reasons at once:
+          #
+          #   Changes must be made through a pull request.
+          #   refusing to allow a GitHub App to create or update workflow
+          #   `security-baseline.yml` without `workflows` permission
+          #
+          # main is protected -- CLAUDE.md says so in bold -- and a release
+          # cannot push to it. Widening the token or bypassing the ruleset to
+          # make that work would trade branch protection for a date stamp.
+          #
+          # It is also the wrong shape. main SHIPS UNSTAMPED on purpose, and a
+          # test asserts it: 0000-00-00 means "not a release", so a working copy
+          # never expires. Only the tag should carry a date, and a tag does not
+          # need to be on a branch to exist.
+          echo "Stamped $today on $(git rev-parse --short HEAD); the tag below points here."
 
       - name: Tag, without ever moving one
         id: tag
