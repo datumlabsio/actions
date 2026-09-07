@@ -36,6 +36,12 @@ that is a decision, not a step.
 - [ ] Second file: `.github/dependabot.yml`, `github-actions` ecosystem,
       grouped. Without it the pin never moves and you are the bump process.
       Native GitHub — no app, no grant.
+- [ ] That file needs `cooldown: default-days: 7`, **excluding
+      `datumlabsio/actions`**. The baseline flags a Dependabot config with no
+      cooldown, so without this the first thing our gate reports is the file we
+      just added. Below 7 it is still flagged; the exclusion is there because
+      our own releases carry the security fixes and delaying those by a week is
+      the opposite of the point.
 - [ ] `npm`/`pip` ecosystems left out. Their dependency bumps are their call.
 - [ ] The body says **what it does not do**. It changes nothing about how they
       build, publishes nothing, reads nothing outside the repo.
@@ -47,11 +53,16 @@ that is a decision, not a step.
 
 - [ ] **The run actually ran.** Not "the check is green" — open the run and
       confirm the jobs executed. A skipped workflow reports success.
+- [ ] **Check the finding count against what you predicted.** Both adoptions so
+      far reported one more than the repository had, and both times the extra
+      one was in a file we had just added. The gate reads our work too.
 - [ ] **A secret finding is a rotation, not a deletion.** Removing the line
       makes the build pass and leaves the credential in history. Say so
       explicitly; it has needed saying every time.
-- [ ] **Add the repo to the register below**, in the same pull request that
-      adopts it. A repo that exists only in somebody's memory is not adopted,
+- [ ] **Add the repo to the register below**, in a companion pull request
+      opened the same day — the adoption lands in *their* repository and the
+      register lives in this one, so it cannot literally be the same pull
+      request. A repo that exists only in somebody's memory is not adopted,
       it is remembered.
 - [ ] File the findings somewhere with an owner. Ours or theirs, but somewhere.
 
@@ -112,6 +123,7 @@ the audit's `baseline-only-repos` input by hand.
 | Repository | Visibility | Adopted | Pin | Dependabot | Who acts on findings |
 | ---| ---| ---| ---| ---| --- |
 | `EmberAssetManagement/ecp-frontend` | private | 2026-09-01 | `v1.1.0` → `v1.2.1` 2026-09-07 | yes, 2026-09-07 | Ember, on the Supabase key rotation |
+| `Westwise-Group/analytics-clickhouse-pipelines` | private | PR open 2026-09-07 | `v1.3.0` | yes, at adoption | **unassigned** — 33 findings, one a live Google OAuth secret |
 
 Keep the columns filled. `Visibility` decides whether the audit can see it at
 all; `Dependabot` decides whether the pin moves without one of us; and the last
