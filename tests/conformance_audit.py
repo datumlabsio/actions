@@ -102,6 +102,24 @@ class Report:
         self.detail.append(f"- **{check}** — {why}")
 
 
+_UNSET = object()
+_LATEST: object = _UNSET
+
+
+def latest_release() -> str | None:
+    """The current `datumlabsio/actions` release tag, or None if unreadable.
+
+    Fails OPEN on purpose. If the releases endpoint cannot be read, a stale pin
+    goes unreported -- which is the same state as before this check existed. The
+    alternative is failing every repo in the fleet on our own API error.
+    """
+    global _LATEST
+    if _LATEST is _UNSET:
+        rel = api("/repos/datumlabsio/actions/releases/latest")
+        _LATEST = (rel or {}).get("tag_name") or None
+    return _LATEST  # type: ignore[return-value]
+
+
 def canonical_stamps() -> dict[str, str]:
     """The `# datum-config:` line each vendored config should carry."""
     listing = api(f"/repos/datumlabsio/actions/contents/configs?ref={CANONICAL_REF}") or []
@@ -195,9 +213,28 @@ def audit(repo: str, stamps: dict[str, str]) -> Report:
     # Only for repos born from a scaffold. `actions` and `scaffolds` are the
     # machinery, not archetype repos — `actions` IS the callee — and asserting
     # they should be thin callers produces findings with no possible fix.
-    ci = file_text(repo, ".github/workflows/ci.yml") if scaffolded else None
+    # A RETROFIT ships `datum-ci.yml`, not `ci.yml` -- deliberately, so it cannot
+    # collide with the CI an existing repo already has. Reading only `ci.yml`
+    # therefore graded every adopted repo on a file that is not ours:
+    # `dl-assessment-platform` was reported as running no Datum workflow and no
+    # security baseline while `datum-ci.yml` sat beside it doing both.
+    #
+    # Ours first, then the scaffold-born name. Never the repo's own `ci.yml`
+    # when a Datum caller exists -- what their pipeline does is theirs.
+    ci_path, ci = None, None
+    if scaffolded:
+        for candidate in (".github/workflows/datum-ci.yml", ".github/workflows/ci.yml"):
+            text = file_text(repo, candidate)
+            if text is not None:
+                ci_path, ci = candidate, text
+                break
     if scaffolded and ci is None:
-        r.fail(THIN_CALLER, "no `.github/workflows/ci.yml`")
+        r.fail(THIN_CALLER, "no `.github/workflows/datum-ci.yml` and no `.github/workflows/ci.yml`")
+        # SECURITY used to live inside the `elif` below, so a repo with no
+        # caller at all was never checked for a baseline -- and an unchecked
+        # check reports as a pass. The absence of a caller IS the absence of
+        # the baseline, and it is reported as such.
+        r.fail(SECURITY, "no Datum caller, so `security-baseline` cannot be running (§6)")
     elif ci is not None:
         # Parsed, not grepped. The first version matched the substring "run:" and
         # flagged polaris for a COMMENT reading "It is a call, not a `run:` step"
@@ -212,24 +249,38 @@ def audit(repo: str, stamps: dict[str, str]) -> Report:
                 if isinstance(step, dict) and "run" in step
             ]
             if runs:
-                r.fail(THIN_CALLER, f"`ci.yml` has a `run:` step in job(s) {', '.join(f'`{j}`' for j in sorted(set(runs)))} — a thin caller runs nothing of its own (§4)")
+                r.fail(THIN_CALLER, f"`{ci_path.rsplit('/', 1)[1]}` has a `run:` step in job(s) {', '.join(f'`{j}`' for j in sorted(set(runs)))} — a thin caller runs nothing of its own (§4)")
         except yaml.YAMLError as exc:
-            r.fail(THIN_CALLER, f"`ci.yml` will not parse as YAML: {exc}")
+            r.fail(THIN_CALLER, f"`{ci_path.rsplit('/', 1)[1]}` will not parse as YAML: {exc}")
         pins = [
             line.split("@", 1)[1].strip()
             for line in ci.splitlines()
             if "uses: datumlabsio/actions/" in line and "@" in line
         ]
         if not pins:
-            r.fail(THIN_CALLER, "`ci.yml` calls no `datumlabsio/actions` workflow")
+            r.fail(THIN_CALLER, f"`{ci_path.rsplit('/', 1)[1]}` calls no `datumlabsio/actions` workflow")
         else:
             unpinned = [p for p in pins if not p.startswith("v")]
             if unpinned:
                 r.fail(THIN_CALLER, f"not pinned to a version tag: {', '.join(f'`{p}`' for p in unpinned)}")
             else:
                 r.detail.append(f"- CI pins: {', '.join(sorted({f'`{p}`' for p in pins}))}")
+                # "Starts with v" was the whole pin check, so `polaris` audited
+                # CONFORMANT while pinned thirteen releases back -- without the
+                # fix that stopped a real private key being suppressed. A pin is
+                # a decision to stay on a version; a stale one is still a
+                # finding, because the gate fixes never arrive.
+                latest = latest_release()
+                stale = sorted({p for p in pins if latest and p != latest})
+                if stale:
+                    r.fail(
+                        THIN_CALLER,
+                        f"pinned to {', '.join(f'`{p}`' for p in stale)}; current release is "
+                        f"`{latest}`. Every gate fix since then is absent -- Renovate opens "
+                        f"the bump, so this means the pull request was never merged",
+                    )
         if "security-baseline" not in ci and "application.yml" not in ci:
-            r.fail(SECURITY, "`ci.yml` does not call `security-baseline` (§6)")
+            r.fail(SECURITY, f"`{ci_path.rsplit('/', 1)[1]}` does not call `security-baseline` (§6)")
 
     # --- pre-commit --------------------------------------------------------
     if file_text(repo, ".pre-commit-config.yaml") is None:
