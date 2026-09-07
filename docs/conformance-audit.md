@@ -3,13 +3,49 @@
 ```yaml
 jobs:
   audit:
-    uses: datumlabsio/actions/.github/workflows/conformance-audit.yml@v0.14.0
+    uses: datumlabsio/actions/.github/workflows/conformance-audit.yml@v1.2.2
     with:
       repos: "datumlabsio/polaris datumlabsio/example"
+      baseline-only-repos: "TheirOrg/their-repo"
     secrets:
       app-id: ${{ secrets.DATUM_POLICE_APP_ID }}
       private-key: ${{ secrets.DATUM_POLICE_PRIVATE_KEY }}
 ```
+
+## Two tiers, and why
+
+`repos` are audited on all seven §12 checks. `baseline-only-repos` are audited on
+four, and **only** four.
+
+An external adopter merges one file and is told, in the page we hand them, that
+it *"changes nothing about how this repository is built"*. Auditing them on the
+§12 list reports missing `CLAUDE.md`, `CODEOWNERS`, `.copier-answers.yml` and
+`.pre-commit-config.yaml` — none of which that team agreed to, none fixable
+without adopting the whole standard, and all of which the scheduled run
+eventually **files as issues in their tracker**.
+
+*A finding nobody can act on is a finding everybody learns to scroll past, and
+it takes the real ones with it.*
+
+| Baseline check | |
+|---|---|
+| `called` | some workflow calls `security-baseline.yml` — any filename, not just `datum-police.yml` |
+| `pinned` | at a version tag, not a moving ref |
+| `current` | at the current release, not thirteen behind |
+| `ran` | **the gate has actually executed** |
+
+The last has no §12 equivalent and is why this tier is worth more than a
+file-presence sweep. An organisation set to *Allow select actions* without
+`datumlabsio/*` allowlisted **skips** the workflow — and a skipped workflow
+reports success. A repository can look adopted for a year while the gate has
+never once run.
+
+A **failing** run is not a finding here. Red means the gate is working; those
+are their findings, not our conformance.
+
+The split is explicit rather than inferred from the owner. "External" is not the
+same as "not in our organisation": a client's repository can live in our org,
+and we may fully adopt one in theirs.
 
 ## What it can and cannot see
 

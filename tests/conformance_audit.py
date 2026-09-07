@@ -55,6 +55,33 @@ DOCS = "docs/ present where the archetype requires it"
 
 ARCHETYPES_NEEDING_DOCS = {"application", "web-app"}
 
+# BASELINE-ONLY. An external adopter merged one file and was told, in writing,
+# that it "changes nothing about how this repository is built". Grading them on
+# CLAUDE.md, a scaffold marker or a pre-commit config audits them against
+# something they never agreed to -- and the scheduled run FILES ISSUES. A
+# finding nobody can act on is a finding everybody learns to scroll past, and
+# it takes the real ones with it.
+#
+# So the tier checks the four things they DID adopt. The fourth is the one with
+# teeth and has no equivalent in the §12 list: whether the gate has ever
+# actually run. If an organisation is set to "Allow select actions" and we are
+# not on the allowlist, the workflow SKIPS -- and a skipped workflow reports
+# success. A repository can sit in the register for a year looking adopted
+# while the gate has never once executed.
+B_CALLER = "Security baseline is called"
+B_PINNED = "Called at a pinned version"
+B_CURRENT = "Pin is the current release"
+B_RAN = "The gate has actually run"
+
+BASELINE_COLUMNS = [
+    ("called", B_CALLER),
+    ("pinned", B_PINNED),
+    ("current", B_CURRENT),
+    ("ran", B_RAN),
+]
+
+BASELINE_CALL = "datumlabsio/actions/.github/workflows/security-baseline.yml@"
+
 
 def api(path: str, *, raw: bool = False, accept: str = "application/vnd.github+json"):
     """GET, returning parsed JSON, or None for 404, or {} for an empty 204.
@@ -107,6 +134,11 @@ class Report:
     owner_team: str = ""
     failed: list[str] = field(default_factory=list)
     detail: list[str] = field(default_factory=list)
+    # "full" = the seven §12 checks. "baseline" = the four an external adopter
+    # actually signed up for. Set explicitly by the caller, never inferred from
+    # the owner: a client repository can live in our organisation, and we may
+    # fully adopt one in theirs.
+    tier: str = "full"
 
     def fail(self, check: str, why: str) -> None:
         if check not in self.failed:
@@ -333,6 +365,89 @@ def audit(repo: str, stamps: dict[str, str]) -> Report:
     return r
 
 
+def audit_baseline(repo: str) -> Report:
+    """The four checks an external adopter agreed to, and no others."""
+    r = Report(repo=repo, tier="baseline", archetype="baseline-only")
+    meta = api(f"/repos/{repo}")
+    if meta is FORBIDDEN or meta is None:
+        r.fail(B_CALLER, "repository not found, or the audit identity cannot see it")
+        return r
+
+    # ANY workflow file, not a fixed name. Externally the file is conventionally
+    # `datum-police.yml`, but nothing enforces that and a repo renaming it has
+    # not stopped being adopted.
+    listing = api(f"/repos/{repo}/contents/.github/workflows")
+    entries = [] if listing in (None, FORBIDDEN) else listing
+    calling: list[tuple[str, str]] = []          # (filename, pinned ref)
+    for entry in entries if isinstance(entries, list) else []:
+        if entry.get("type") != "file" or not entry["name"].endswith((".yml", ".yaml")):
+            continue
+        text = file_text(repo, f".github/workflows/{entry['name']}")
+        if not text:
+            continue
+        for line in text.splitlines():
+            if BASELINE_CALL in line:
+                calling.append((entry["name"], line.split(BASELINE_CALL, 1)[1].strip()))
+
+    if not calling:
+        r.fail(B_CALLER, "no workflow calls `security-baseline.yml` — the file was "
+                         "removed, renamed away from the call, or never merged")
+        return r
+
+    r.detail.append("- called by: " + ", ".join(f"`{f}`" for f, _ in sorted(calling)))
+
+    refs = {ref for _, ref in calling}
+    unpinned = sorted(x for x in refs if not x.startswith("v"))
+    if unpinned:
+        r.fail(B_PINNED, "not a version tag: " + ", ".join(f"`{x}`" for x in unpinned)
+                         + " — a moving ref lets a change in our repository silently "
+                           "change what their CI does")
+    pinned = sorted(refs - set(unpinned))
+    if pinned:
+        r.detail.append("- pinned at: " + ", ".join(f"`{x}`" for x in pinned))
+        latest = latest_release()
+        stale = [x for x in pinned if latest and x != latest]
+        if stale:
+            r.fail(B_CURRENT, "pinned to " + ", ".join(f"`{x}`" for x in stale)
+                              + f"; current release is `{latest}`")
+
+    # --- has it ever actually run? ---------------------------------------
+    #
+    # The one check with no §12 equivalent, and the reason this tier is worth
+    # more than a file-presence sweep. Presence proves a merge; it does not
+    # prove a run.
+    ran_any = False
+    disabled = []
+    never = []
+    for name, _ in sorted(set(calling)):
+        wf = api(f"/repos/{repo}/actions/workflows/{name}")
+        if wf in (None, FORBIDDEN) or not isinstance(wf, dict):
+            continue
+        if wf.get("state", "active") != "active":
+            disabled.append(f"`{name}` is {wf['state']}")
+            continue
+        runs = api(f"/repos/{repo}/actions/workflows/{name}/runs?per_page=1")
+        items = (runs or {}).get("workflow_runs") if isinstance(runs, dict) else None
+        if not items:
+            never.append(f"`{name}`")
+            continue
+        ran_any = True
+        last = items[0]
+        r.detail.append(
+            f"- last run of `{name}`: {(last.get('created_at') or '?')[:10]}"
+            f" — {last.get('conclusion') or last.get('status')}")
+
+    if disabled:
+        r.fail(B_RAN, "disabled, so it cannot run: " + "; ".join(disabled))
+    elif never and not ran_any:
+        r.fail(B_RAN, "never executed: " + ", ".join(never) + ". A workflow that is "
+               "present but has never run is the shape of an organisation set to "
+               "*Allow select actions* without `datumlabsio/*` on the allowlist — "
+               "it skips, and a skipped workflow reports success")
+
+    return r
+
+
 def render(r: Report) -> str:
     lines = [
         f"**Repo:** `{r.repo}`",
@@ -380,8 +495,8 @@ def summarise(reports: list[Report]) -> str:
         return "## Conformance\n\n_No repositories audited._\n"
 
     clean = [r for r in reports if not r.failed]
-    internal = [r for r in reports if r.repo.startswith("datumlabsio/")]
-    external = [r for r in reports if not r.repo.startswith("datumlabsio/")]
+    full = [r for r in reports if r.tier == "full"]
+    baseline = [r for r in reports if r.tier == "baseline"]
 
     out = [
         "## Conformance",
@@ -389,23 +504,51 @@ def summarise(reports: list[Report]) -> str:
         f"**{len(clean)} of {len(reports)}** audited repositories are conformant.",
         "",
     ]
-    if external:
-        out.append(f"{len(internal)} internal, {len(external)} external.")
+
+    # TWO TABLES, NOT ONE. Putting both tiers in one grid needs a shared column
+    # set, and any shared set either grades an external adopter on §12 items
+    # they never agreed to or drops the run check that only applies to them.
+    # Either way one tier gets a column it cannot answer, and a blank cell in a
+    # conformance table gets read as a pass.
+    for tier, rows, columns, title in (
+        ("full", full, CHECK_COLUMNS, "Adopted the standard"),
+        ("baseline", baseline, BASELINE_COLUMNS, "Adopted the security baseline only"),
+    ):
+        if not rows:
+            continue
+        out += [f"### {title} ({len(rows)})", ""]
+        if tier == "full":
+            header = ("| Repo | Archetype | Owner | "
+                      + " | ".join(k for k, _ in columns) + " |")
+            out += [header, "|" + "---|" * (3 + len(columns))]
+        else:
+            out += ["| Repo | " + " | ".join(k for k, _ in columns) + " |",
+                    "|" + "---|" * (1 + len(columns))]
+
+        # Worst first. A table sorted by name buries the thing you opened it for.
+        for r in sorted(rows, key=lambda x: (-len(x.failed), x.repo)):
+            cells = ["-" if c in r.failed else "ok" for _, c in columns]
+            if tier == "full":
+                owner = r.owner_team or "**none**"
+                out.append(f"| `{r.repo}` | {r.archetype} | {owner} | "
+                           + " | ".join(cells) + " |")
+            else:
+                out.append(f"| `{r.repo}` | " + " | ".join(cells) + " |")
         out.append("")
 
-    header = "| Repo | Archetype | Owner | " + " | ".join(k for k, _ in CHECK_COLUMNS) + " |"
-    out += [header, "|" + "---|" * (3 + len(CHECK_COLUMNS))]
-
-    # Worst first. A table sorted by name buries the thing you opened it for.
-    for r in sorted(reports, key=lambda x: (-len(x.failed), x.repo)):
-        cells = ["-" if c in r.failed else "ok" for _, c in CHECK_COLUMNS]
-        owner = r.owner_team or "**none**"
-        out.append(f"| `{r.repo}` | {r.archetype} | {owner} | " + " | ".join(cells) + " |")
+    if baseline:
+        out += [
+            "Baseline-only repositories are graded on the **four things they "
+            "adopted**, not the seven §12 checks. They merged one file and were "
+            "told it changes nothing about how their repository is built; "
+            "auditing them against the rest would be grading them on something "
+            "they never agreed to.",
+            "",
+        ]
 
     out += [
-        "",
         "`-` is a failed check, not an untested one — every column is checked on "
-        "every repo.",
+        "every repo in its tier.",
         "",
         "This audits what is observable from OUTSIDE a repo: settings, files, pins, "
         "config stamps. It does not re-run what the repo's own CI decides, so a full "
@@ -415,7 +558,7 @@ def summarise(reports: list[Report]) -> str:
     ]
 
     # The gap that matters more than any single failing check.
-    unowned = [r.repo for r in reports if not r.owner_team]
+    unowned = [r.repo for r in full if not r.owner_team]
     if unowned:
         out += [
             f"**{len(unowned)} repositor{'y has' if len(unowned) == 1 else 'ies have'} "
@@ -427,16 +570,33 @@ def summarise(reports: list[Report]) -> str:
     return "\n".join(out) + "\n"
 
 
+def split_args(argv: list[str]) -> tuple[list[str], list[str]]:
+    """Repos before `--baseline-only`, repos after it.
+
+    EXPLICIT, not inferred from the owner. "external" is not the same as "not in
+    our organisation": a client's repository can live in our org, and we may
+    fully adopt one in theirs. Which standard binds a repository is a decision
+    somebody makes, so it is typed out.
+    """
+    if "--baseline-only" not in argv:
+        return argv, []
+    i = argv.index("--baseline-only")
+    return argv[:i], argv[i + 1:]
+
+
 def main(argv: list[str]) -> int:
-    repos = argv[1:]
-    if not repos:
-        print("usage: conformance_audit.py owner/repo [owner/repo ...]", file=sys.stderr)
+    full, baseline = split_args(argv[1:])
+    if not full and not baseline:
+        print("usage: conformance_audit.py [owner/repo ...] "
+              "[--baseline-only owner/repo ...]", file=sys.stderr)
         return 2
 
-    stamps = canonical_stamps()
-    print(f"Canonical config stamps: {len(stamps)} known\n")
+    stamps = canonical_stamps() if full else {}
+    if full:
+        print(f"Canonical config stamps: {len(stamps)} known\n")
 
-    reports = [audit(repo, stamps) for repo in repos]
+    reports = [audit(repo, stamps) for repo in full]
+    reports += [audit_baseline(repo) for repo in baseline]
     drifted = [r for r in reports if r.failed]
 
     for r in reports:

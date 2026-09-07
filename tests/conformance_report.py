@@ -46,10 +46,25 @@ check("a conformant repo appears in the report", "polaris" in out,
       "if only failures appear, the report cannot show coverage")
 check("the headline counts conformant repos", "1 of 1" in out, out[:120])
 
-# --- internal and external are distinguished -------------------------------
-out = ca.summarise([clean, rep("client-org/their-app", failed=[ca.SECURITY])])
-check("internal and external are counted separately",
-      "1 internal, 1 external" in out, out[:200])
+# --- the two tiers are distinguished ---------------------------------------
+#
+# This used to count "internal vs external" from the owner prefix. That is the
+# wrong discriminator and it was replaced: a client's repository can live in our
+# organisation, and we may fully adopt one in theirs. What separates the rows is
+# WHICH STANDARD BINDS THEM, which the caller states, so the report reads the
+# tier rather than the name.
+external = ca.Report(repo="client-org/their-app", tier="baseline",
+                     archetype="baseline-only")
+external.fail(ca.B_CURRENT, "why")
+out = ca.summarise([clean, external])
+check("each tier gets its own section",
+      "Adopted the standard (1)" in out
+      and "Adopted the security baseline only (1)" in out, out[:300])
+check("a baseline repo is not graded in the §12 table",
+      "their-app" not in out.split("security baseline only")[0],
+      "an external adopter appeared under the §12 columns")
+check("the report says why the baseline tier is graded differently",
+      "never agreed to" in out, out[-400:])
 
 # --- worst first, because a name-sorted table buries the point -------------
 rows = ca.summarise([

@@ -80,6 +80,13 @@ jobs:
       - name: The audit grades our caller, and a stale pin is a finding
         run: python3 tests/audit_reads_the_datum_caller.py
 
+      # An external adopter merged ONE file and was told it changes nothing
+      # about how their repo is built. Grading them on CLAUDE.md and a
+      # pre-commit config -- and eventually FILING those as issues -- audits
+      # them against something they never agreed to.
+      - name: An external adopter is audited on what they adopted
+        run: python3 tests/baseline_only_tier.py
+
   # The placeholder-key filter DROPS security findings, so it is tested by
   # extracting the script security-baseline.yml actually ships, rather than a
   # copy kept beside it. Real keys of four formats are generated at run time and
