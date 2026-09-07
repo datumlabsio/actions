@@ -109,10 +109,16 @@ def main() -> int:
     if not ok:
         failures.append("stamp marker count")
 
-    ok = "Stamp the release date" in RELEASE.read_text()
-    print(f"    [{'ok' if ok else 'FAIL'}] release.yml carries the stamping step")
+    # release.yml must NOT stamp. GITHUB_TOKEN may not introduce any object that
+    # modifies a workflow file -- branch OR tag -- and `workflows` cannot be
+    # granted to it. Two attempts, six silent release failures over four days.
+    # If this assertion ever flips, the release pipeline is broken again.
+    rel_code = "\n".join(
+        l for l in RELEASE.read_text().split("\n") if not l.lstrip().startswith("#"))
+    ok = "Stamp the release date" not in rel_code
+    print(f"    [{'ok' if ok else 'FAIL'}] release.yml does NOT stamp — it cannot, and trying breaks every release")
     if not ok:
-        failures.append("release stamping step missing")
+        failures.append("release.yml stamps again; GITHUB_TOKEN cannot push a workflow-file change")
 
     # And the shipped default must be the unstamped value: a stamped main would
     # expire this repository's own CI a year after someone forgot.
@@ -126,14 +132,19 @@ def main() -> int:
     # cut. Apply its exact regex to the real file here, so a shape change in the
     # workflow is caught now rather than by a release that silently ships
     # unstamped code to every future adopter.
+    # The marker line stays in security-baseline.yml. Nothing writes it today, so
+    # every release reads 0000-00-00 and fails open -- no release expires. That is
+    # the deliberate state until the expiry returns, and B-77 records the route:
+    # derive the age at runtime from github.job_workflow_sha, which needs no
+    # stamping and no release coupling.
     text = WORKFLOW.read_text()
     stamped, n = re.subn(
         r'(DATUM_RELEASED_ON: ")[0-9-]+(" # datum-release-stamp)',
         r'\g<1>2026-09-01\g<2>', text, count=1)
     ok = n == 1 and 'DATUM_RELEASED_ON: "2026-09-01" # datum-release-stamp' in stamped
-    print(f"    [{'ok' if ok else 'FAIL'}] release.yml's rewrite matches the shipped file")
+    print(f"    [{'ok' if ok else 'FAIL'}] the marker line is still rewritable, for when expiry returns")
     if not ok:
-        failures.append("stamp regex does not match the file it rewrites")
+        failures.append("the stamp marker has lost its shape")
 
     # And the stamped result must actually parse as a workflow, and expire.
     import yaml
@@ -156,18 +167,7 @@ def main() -> int:
     # It was also the wrong shape. main ships unstamped ON PURPOSE (asserted
     # above), so only the tag should ever carry a date, and a tag does not need
     # to be on a branch to exist.
-    rel = RELEASE.read_text()
-    stamp_step = rel[rel.index("Stamp the release date"):rel.index("Tag, without ever moving one")]
-    code = "\n".join(l for l in stamp_step.split("\n") if not l.lstrip().startswith("#"))
-    ok = "git push" not in code
-    print(f"    [{'ok' if ok else 'FAIL'}] the stamp step pushes no branch")
-    if not ok:
-        failures.append("the stamp step pushes to a branch; main is protected and this fails silently")
-
-    # ...and the only push in the whole workflow is a tag.
-    pushes = [l.strip() for l in
-              "\n".join(l for l in rel.split("\n") if not l.lstrip().startswith("#")).split("\n")
-              if "git push" in l]
+    pushes = [l.strip() for l in rel_code.split("\n") if "git push" in l]
     ok = all("refs/tags/" in p for p in pushes)
     print(f"    [{'ok' if ok else 'FAIL'}] every push in release.yml is a tag ({len(pushes)} found)")
     if not ok:
