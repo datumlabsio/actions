@@ -123,7 +123,13 @@ the audit's `baseline-only-repos` input by hand.
 | Repository | Visibility | Adopted | Pin | Dependabot | Who acts on findings |
 | ---| ---| ---| ---| ---| --- |
 | `EmberAssetManagement/ecp-frontend` | private | 2026-09-01 | `v1.1.0` → `v1.2.1` 2026-09-07 | yes, 2026-09-07 | Ember, on the Supabase key rotation |
-| `Westwise-Group/analytics-clickhouse-pipelines` | private | PR open 2026-09-07 | `v1.3.0` | yes, at adoption | **unassigned** — 33 findings, one a live Google OAuth secret |
+| `Westwise-Group/analytics-clickhouse-pipelines` | private | **not yet — PR staged, reopened live on 2026-09-09** | `v1.3.0` | in the same PR | **unassigned** — 33 findings, one a live Google OAuth secret |
+
+A row that is **staged rather than adopted** says so. `analytics-clickhouse-pipelines`
+is [PR #218](https://github.com/Westwise-Group/analytics-clickhouse-pipelines/pull/218),
+closed on purpose and reopened live during the 9 September session — the branch
+survives a close, so reopening re-runs the scan in front of the room. Until it
+merges the repository has no gate, and the register should not imply otherwise.
 
 Keep the columns filled. `Visibility` decides whether the audit can see it at
 all; `Dependabot` decides whether the pin moves without one of us; and the last
