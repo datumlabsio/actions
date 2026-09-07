@@ -32,6 +32,21 @@ on:
         type: string
         required: true
 
+      baseline-only-repos:
+        description: >-
+          Space-separated owner/repo list audited on the SECURITY BASELINE ONLY
+          -- called, pinned, current, and has actually run -- rather than the
+          seven §12 checks.
+
+          For a repository that adopted one file and was told it changes nothing
+          about how they build. The §12 items are not failures there, they are
+          things that team never agreed to, and the scheduled run files issues.
+
+          EXPLICIT, not inferred from the owner: a client's repository can live
+          in our organisation, and we may fully adopt one in theirs.
+        type: string
+        default: ""
+
       dry-run:
         description: >-
           Report without filing issues. Defaults TRUE — running this against the
@@ -87,11 +102,20 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           REPOS: ${{ inputs.repos }}
+          BASELINE_REPOS: ${{ inputs.baseline-only-repos }}
         run: |
           set -euo pipefail
           python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          # The flag is passed only when there is something after it. An empty
+          # `--baseline-only` with no repos reads as a caller that meant to name
+          # some and lost them, and silently auditing nothing is the failure
+          # this whole file exists to avoid.
+          args="$REPOS"
+          if [ -n "${BASELINE_REPOS// /}" ]; then
+            args="$args --baseline-only $BASELINE_REPOS"
+          fi
           # shellcheck disable=SC2086
-          python3 tests/conformance_audit.py $REPOS
+          python3 tests/conformance_audit.py $args
 
       # The report covers EVERY audited repo, including the conformant ones.
       # Issues answer "what is broken"; they cannot answer "where do we stand",
