@@ -43,6 +43,14 @@ never once run.
 A **failing** run is not a finding here. Red means the gate is working; those
 are their findings, not our conformance.
 
+**It cannot reach a private repository in another organisation.** The job runs
+as an App installation token scoped to one owner, so an external private repo
+answers 404 — indistinguishable from a deleted one. We decided (2026-09-07) not
+to hold a credential in a client's organisation for this, so external private
+adopters are tracked by
+[the register](adopting-a-repo-we-do-not-own.md) rather than by this workflow.
+A **public** external repo needs no credential and can be passed by hand.
+
 The split is explicit rather than inferred from the owner. "External" is not the
 same as "not in our organisation": a client's repository can live in our org,
 and we may fully adopt one in theirs.
