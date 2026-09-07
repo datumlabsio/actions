@@ -36,6 +36,10 @@ import yaml
 from dataclasses import dataclass, field
 
 API = "https://api.github.com"
+
+# Returned when the API says 403. Distinct from None (absent) on purpose: a
+# check that cannot see its subject must report "unverified", never "missing".
+FORBIDDEN = object()
 TOKEN = os.environ.get("GH_TOKEN", "")
 CANONICAL_REF = os.environ.get("CANONICAL_REF", "main")
 
@@ -76,12 +80,20 @@ def api(path: str, *, raw: bool = False, accept: str = "application/vnd.github+j
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return None
+        # 403 is NOT 404. "I may not look" and "it is not there" are different
+        # facts, and collapsing them makes the audit assert absence it never
+        # checked. The rules endpoint answers 403 on any repository we do not
+        # administer -- every repository in a client's organisation -- and this
+        # used to raise, so one external repo aborted the whole run and took
+        # every internal report with it.
+        if e.code == 403:
+            return FORBIDDEN
         raise
 
 
 def file_text(repo: str, path: str) -> str | None:
     d = api(f"/repos/{repo}/contents/{path}")
-    if not d or "content" not in d:
+    if d is FORBIDDEN or not d or "content" not in d:
         return None
     import base64
 
@@ -102,9 +114,28 @@ class Report:
         self.detail.append(f"- **{check}** — {why}")
 
 
+_UNSET = object()
+_LATEST: object = _UNSET
+
+
+def latest_release() -> str | None:
+    """The current `datumlabsio/actions` release tag, or None if unreadable.
+
+    Fails OPEN on purpose. If the releases endpoint cannot be read, a stale pin
+    goes unreported -- which is the same state as before this check existed. The
+    alternative is failing every repo in the fleet on our own API error.
+    """
+    global _LATEST
+    if _LATEST is _UNSET:
+        rel = api("/repos/datumlabsio/actions/releases/latest")
+        _LATEST = None if rel is FORBIDDEN else ((rel or {}).get("tag_name") or None)
+    return _LATEST  # type: ignore[return-value]
+
+
 def canonical_stamps() -> dict[str, str]:
     """The `# datum-config:` line each vendored config should carry."""
-    listing = api(f"/repos/datumlabsio/actions/contents/configs?ref={CANONICAL_REF}") or []
+    listing = api(f"/repos/datumlabsio/actions/contents/configs?ref={CANONICAL_REF}")
+    listing = [] if listing is FORBIDDEN else (listing or [])
     out: dict[str, str] = {}
     for entry in listing:
         if entry["type"] != "file" or entry["name"] == "README.md":
@@ -122,7 +153,7 @@ def canonical_stamps() -> dict[str, str]:
 def audit(repo: str, stamps: dict[str, str]) -> Report:
     r = Report(repo=repo)
     meta = api(f"/repos/{repo}")
-    if meta is None:
+    if meta is FORBIDDEN or meta is None:
         r.fail(BORN, "repository not found, or the audit identity cannot see it")
         return r
     default_branch = meta.get("default_branch", "main")
@@ -174,6 +205,8 @@ def audit(repo: str, stamps: dict[str, str]) -> Report:
                     f"/orgs/datumlabsio/teams/{team}/repos/{repo}",
                     accept="application/vnd.github.v3.repository+json",
                 )
+                if perm is FORBIDDEN:
+                    continue        # cannot see the team's grant; do not guess
                 if perm is None:
                     r.fail(
                         FILES,
@@ -184,20 +217,49 @@ def audit(repo: str, stamps: dict[str, str]) -> Report:
                     r.fail(FILES, f"`@datumlabsio/{team}` has access but not write, so CODEOWNERS is ignored")
 
     # --- branch protection ------------------------------------------------
-    rules = api(f"/repos/{repo}/rules/branches/{default_branch}") or []
-    have = {rule["type"] for rule in rules} if isinstance(rules, list) else set()
-    want = {"pull_request", "deletion", "non_fast_forward"}
-    if not want <= have:
-        r.fail(PROTECTION, f"`{default_branch}` is missing: {', '.join(sorted(want - have))}")
+    rules = api(f"/repos/{repo}/rules/branches/{default_branch}")
+    if rules is FORBIDDEN:
+        r.fail(
+            PROTECTION,
+            f"cannot read `{default_branch}`'s rules — the audit identity does not "
+            f"administer this repository. **Unverified, not missing.** Expected on a "
+            f"repository outside our organisation, where branch protection is theirs "
+            f"to set; on one of ours it means the audit App is missing admin",
+        )
+    else:
+        rules = rules or []
+        have = {rule["type"] for rule in rules} if isinstance(rules, list) else set()
+        want = {"pull_request", "deletion", "non_fast_forward"}
+        if not want <= have:
+            r.fail(PROTECTION, f"`{default_branch}` is missing: {', '.join(sorted(want - have))}")
 
     # --- CI is a pinned thin caller ---------------------------------------
     #
     # Only for repos born from a scaffold. `actions` and `scaffolds` are the
     # machinery, not archetype repos — `actions` IS the callee — and asserting
     # they should be thin callers produces findings with no possible fix.
-    ci = file_text(repo, ".github/workflows/ci.yml") if scaffolded else None
+    # A RETROFIT ships `datum-ci.yml`, not `ci.yml` -- deliberately, so it cannot
+    # collide with the CI an existing repo already has. Reading only `ci.yml`
+    # therefore graded every adopted repo on a file that is not ours:
+    # `dl-assessment-platform` was reported as running no Datum workflow and no
+    # security baseline while `datum-ci.yml` sat beside it doing both.
+    #
+    # Ours first, then the scaffold-born name. Never the repo's own `ci.yml`
+    # when a Datum caller exists -- what their pipeline does is theirs.
+    ci_path, ci = None, None
+    if scaffolded:
+        for candidate in (".github/workflows/datum-ci.yml", ".github/workflows/ci.yml"):
+            text = file_text(repo, candidate)
+            if text is not None:
+                ci_path, ci = candidate, text
+                break
     if scaffolded and ci is None:
-        r.fail(THIN_CALLER, "no `.github/workflows/ci.yml`")
+        r.fail(THIN_CALLER, "no `.github/workflows/datum-ci.yml` and no `.github/workflows/ci.yml`")
+        # SECURITY used to live inside the `elif` below, so a repo with no
+        # caller at all was never checked for a baseline -- and an unchecked
+        # check reports as a pass. The absence of a caller IS the absence of
+        # the baseline, and it is reported as such.
+        r.fail(SECURITY, "no Datum caller, so `security-baseline` cannot be running (§6)")
     elif ci is not None:
         # Parsed, not grepped. The first version matched the substring "run:" and
         # flagged polaris for a COMMENT reading "It is a call, not a `run:` step"
@@ -212,24 +274,38 @@ def audit(repo: str, stamps: dict[str, str]) -> Report:
                 if isinstance(step, dict) and "run" in step
             ]
             if runs:
-                r.fail(THIN_CALLER, f"`ci.yml` has a `run:` step in job(s) {', '.join(f'`{j}`' for j in sorted(set(runs)))} — a thin caller runs nothing of its own (§4)")
+                r.fail(THIN_CALLER, f"`{ci_path.rsplit('/', 1)[1]}` has a `run:` step in job(s) {', '.join(f'`{j}`' for j in sorted(set(runs)))} — a thin caller runs nothing of its own (§4)")
         except yaml.YAMLError as exc:
-            r.fail(THIN_CALLER, f"`ci.yml` will not parse as YAML: {exc}")
+            r.fail(THIN_CALLER, f"`{ci_path.rsplit('/', 1)[1]}` will not parse as YAML: {exc}")
         pins = [
             line.split("@", 1)[1].strip()
             for line in ci.splitlines()
             if "uses: datumlabsio/actions/" in line and "@" in line
         ]
         if not pins:
-            r.fail(THIN_CALLER, "`ci.yml` calls no `datumlabsio/actions` workflow")
+            r.fail(THIN_CALLER, f"`{ci_path.rsplit('/', 1)[1]}` calls no `datumlabsio/actions` workflow")
         else:
             unpinned = [p for p in pins if not p.startswith("v")]
             if unpinned:
                 r.fail(THIN_CALLER, f"not pinned to a version tag: {', '.join(f'`{p}`' for p in unpinned)}")
             else:
                 r.detail.append(f"- CI pins: {', '.join(sorted({f'`{p}`' for p in pins}))}")
+                # "Starts with v" was the whole pin check, so `polaris` audited
+                # CONFORMANT while pinned thirteen releases back -- without the
+                # fix that stopped a real private key being suppressed. A pin is
+                # a decision to stay on a version; a stale one is still a
+                # finding, because the gate fixes never arrive.
+                latest = latest_release()
+                stale = sorted({p for p in pins if latest and p != latest})
+                if stale:
+                    r.fail(
+                        THIN_CALLER,
+                        f"pinned to {', '.join(f'`{p}`' for p in stale)}; current release is "
+                        f"`{latest}`. Every gate fix since then is absent -- Renovate opens "
+                        f"the bump, so this means the pull request was never merged",
+                    )
         if "security-baseline" not in ci and "application.yml" not in ci:
-            r.fail(SECURITY, "`ci.yml` does not call `security-baseline` (§6)")
+            r.fail(SECURITY, f"`{ci_path.rsplit('/', 1)[1]}` does not call `security-baseline` (§6)")
 
     # --- pre-commit --------------------------------------------------------
     if file_text(repo, ".pre-commit-config.yaml") is None:
@@ -237,7 +313,7 @@ def audit(repo: str, stamps: dict[str, str]) -> Report:
 
     # --- docs/ where the archetype requires it -----------------------------
     if scaffolded and r.archetype in ARCHETYPES_NEEDING_DOCS:
-        if api(f"/repos/{repo}/contents/docs") is None:
+        if api(f"/repos/{repo}/contents/docs") in (None, FORBIDDEN):
             r.fail(DOCS, f"archetype `{r.archetype}` has external consumers, so §3 requires a `docs/` folder")
 
     # --- vendored configs are current --------------------------------------
