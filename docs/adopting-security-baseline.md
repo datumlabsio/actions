@@ -41,7 +41,7 @@ permissions:
 
 jobs:
   security:
-    uses: datumlabsio/actions/.github/workflows/security-baseline.yml@v0.27.0
+    uses: datumlabsio/actions/.github/workflows/security-baseline.yml@v1.2.1
 ```
 
 That is everything. The tool versions are pinned **inside** the workflow this
@@ -56,14 +56,35 @@ The pin above does not move on its own. Two ways to keep it fresh, and doing
 neither is a choice too — a year-old scanner passes because its rules are old,
 not because your code is clean.
 
-**Renovate**, if you run it. One line, and our releases arrive as a pull request
-you review like any other:
+**Dependabot** — the recommended one, because it is native GitHub. Nothing is
+installed, no third-party app is granted access to your organisation, and no
+credential is shared with anyone. Drop this at `.github/dependabot.yml`:
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+```
+
+Grouped on purpose: ungrouped it opens one pull request per action per bump, and
+a weekly flood is a flood people learn to close unread.
+
+**Renovate**, if you already run it. One line:
 
 ```json
 { "extends": ["github>datumlabsio/.github"] }
 ```
 
-**Or bump it by hand** when we tell you there is a reason to.
+**Or bump it by hand** when we tell you there is a reason to. Worth knowing what
+that costs: the first repository to adopt this sat on a release that suppressed
+a real private key for six days, because the bump depended on somebody
+noticing.
 
 ## Optional — pinning the tools yourself
 
