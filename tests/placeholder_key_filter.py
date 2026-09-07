@@ -100,6 +100,40 @@ def build_cases(d: Path):
         clipped[i:i + 70] for i in range(0, len(clipped), 70))) + "```\n")
     cases.append(("truncated exactly at the private boundary", p, True))
 
+    # A PEM is not required to use line breaks, and Semgrep flags the one-line
+    # form too. Reading only the lines BETWEEN the markers finds no body there,
+    # and "no body" suppresses -- so a whole key on one line used to vanish.
+    ossh_text = (d / "openssh-ed25519.pem").read_text().strip().split("\n")
+    p = d / "oneline_real.md"
+    p.write_text("Example:\n\n" + "".join(ossh_text) + "\n")
+    cases.append(("complete OpenSSH key written on ONE line", p, False))
+
+    # The same collapse, one marker at a time: body glued to BEGIN, then to END.
+    p = d / "body_on_begin_line.md"
+    p.write_text(ossh_text[0] + "".join(ossh_text[1:-1]) + "\n" + ossh_text[-1] + "\n")
+    cases.append(("complete key, body glued to the BEGIN marker", p, False))
+
+    p = d / "body_on_end_line.md"
+    p.write_text(ossh_text[0] + "\n" + "".join(ossh_text[1:-1]) + ossh_text[-1] + "\n")
+    cases.append(("complete key, body glued to the END marker", p, False))
+
+    # ...and the placeholder in that same shape must still suppress, or the fix
+    # above would just be "keep everything on one line".
+    p = d / "oneline_placeholder.md"
+    p.write_text("`" + "-----BEGIN OPENSSH PRIVATE KEY-----" + PLACEHOLDER_BODY
+                 + "-----END OPENSSH PRIVATE KEY-----" + "`\n")
+    cases.append(("truncated header written on ONE line", p, True))
+
+    # A block ends at its own END marker. Two blocks in one file -- a
+    # placeholder, then a real key -- must be judged separately; reading past
+    # the first END borrows the second block's bytes and judges on those.
+    p = d / "two_blocks.md"
+    p.write_text("Placeholder:\n\n```\n"
+                 + pem_block(PLACEHOLDER_BODY + "\n... (full private key) ...")
+                 + "```\n\nAnd a real one:\n\n```\n"
+                 + "\n".join(ossh_text) + "\n```\n")
+    cases.append(("placeholder block followed by a real key", p, True))
+
     # --- the adversarial one: a real key with its middle removed still leaks
     # private bytes, and partial-key recovery is a real attack. Must be kept.
     rsa = (d / "rsa.pem").read_text().strip().split("\n")

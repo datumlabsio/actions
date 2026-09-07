@@ -324,23 +324,40 @@ jobs:
 
 
           def pem_body(path, start_line):
+              """Base64 between the markers -- INCLUDING bytes sharing their line.
+
+              A PEM written on one line is still a PEM, and Semgrep flags it. Reading
+              only the lines strictly between BEGIN and END finds no body there, and
+              "no body" is a suppression rule -- so a complete key on one line would be
+              dropped as a placeholder. The markers are therefore cut off their own
+              lines and what remains is scanned like any other line.
+              """
               try:
                   lines = open(path, encoding="utf-8", errors="replace").read().split("\n")
               except OSError:
                   return None
               i = start_line - 1
               limit = min(len(lines), start_line + 2)
-              while i < limit and not BEGIN.search(lines[i]):
+              begin = None
+              while i < limit:
+                  begin = BEGIN.search(lines[i])
+                  if begin:
+                      break
                   i += 1
-              if i >= limit:
+              if begin is None:
                   return None
               body = []
-              for ln in lines[i + 1:]:
-                  if END.search(ln):
-                      break
-                  s = ln.strip()
+              # The BEGIN line contributes only what follows its marker; every later
+              # line contributes whole, until END, which contributes what precedes it.
+              for seg in [lines[i][begin.end():]] + lines[i + 1:]:
+                  end = END.search(seg)
+                  if end:
+                      seg = seg[:end.start()]
+                  s = seg.strip()
                   if B64_LINE.match(s):
                       body.append(s)
+                  if end:
+                      break
               return "".join(body)
 
 
