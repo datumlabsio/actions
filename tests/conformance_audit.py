@@ -281,6 +281,76 @@ def render(r: Report) -> str:
     return "\n".join(lines)
 
 
+# The seven §12 checks, in the order a reader cares about: can we see it at
+# all, is it protected, is it scanned, then the rest.
+CHECK_COLUMNS = [
+    ("born", BORN),
+    ("files", FILES),
+    ("protection", PROTECTION),
+    ("caller", THIN_CALLER),
+    ("security", SECURITY),
+    ("hooks", PRECOMMIT),
+    ("docs", DOCS),
+]
+
+
+def summarise(reports: list[Report]) -> str:
+    """One table: every audited repo, every check, pass or fail.
+
+    Deliberately includes the repos that PASS. An issue tracker shows what is
+    broken; it cannot show coverage, because a conformant repo files nothing.
+    """
+    if not reports:
+        return "## Conformance\n\n_No repositories audited._\n"
+
+    clean = [r for r in reports if not r.failed]
+    internal = [r for r in reports if r.repo.startswith("datumlabsio/")]
+    external = [r for r in reports if not r.repo.startswith("datumlabsio/")]
+
+    out = [
+        "## Conformance",
+        "",
+        f"**{len(clean)} of {len(reports)}** audited repositories are conformant.",
+        "",
+    ]
+    if external:
+        out.append(f"{len(internal)} internal, {len(external)} external.")
+        out.append("")
+
+    header = "| Repo | Archetype | Owner | " + " | ".join(k for k, _ in CHECK_COLUMNS) + " |"
+    out += [header, "|" + "---|" * (3 + len(CHECK_COLUMNS))]
+
+    # Worst first. A table sorted by name buries the thing you opened it for.
+    for r in sorted(reports, key=lambda x: (-len(x.failed), x.repo)):
+        cells = ["-" if c in r.failed else "ok" for _, c in CHECK_COLUMNS]
+        owner = r.owner_team or "**none**"
+        out.append(f"| `{r.repo}` | {r.archetype} | {owner} | " + " | ".join(cells) + " |")
+
+    out += [
+        "",
+        "`-` is a failed check, not an untested one — every column is checked on "
+        "every repo.",
+        "",
+        "This audits what is observable from OUTSIDE a repo: settings, files, pins, "
+        "config stamps. It does not re-run what the repo's own CI decides, so a full "
+        "row of `ok` means *this repo is set up to be checked*, not *this repo is "
+        "correct*.",
+        "",
+    ]
+
+    # The gap that matters more than any single failing check.
+    unowned = [r.repo for r in reports if not r.owner_team]
+    if unowned:
+        out += [
+            f"**{len(unowned)} repositor{'y has' if len(unowned) == 1 else 'ies have'} "
+            "no owning team.** A CODEOWNERS entry naming a team without write access is "
+            "silently ignored by GitHub, so these look reviewed and are not: "
+            + ", ".join(f"`{r}`" for r in unowned),
+            "",
+        ]
+    return "\n".join(out) + "\n"
+
+
 def main(argv: list[str]) -> int:
     repos = argv[1:]
     if not repos:
@@ -310,6 +380,20 @@ def main(argv: list[str]) -> int:
                 "failed": r.failed, "body": render(r)} for r in drifted]
     with open("conformance-findings.json", "w") as fh:
         json.dump(payload, fh, indent=2)
+
+    # EVERY repo, not just the drifted ones. Issues answer "what is broken";
+    # they cannot answer "where do we stand", because a conformant repo files
+    # nothing and is therefore indistinguishable from one nobody has looked at.
+    #
+    # That distinction is the whole rollout question: 1 of 59 and 40 of 59 look
+    # identical in an issue list.
+    summary = summarise(reports)
+    with open("conformance-report.md", "w") as fh:
+        fh.write(summary)
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary:
+        with open(step_summary, "a") as fh:
+            fh.write(summary)
 
     print(f"{len(drifted)} of {len(reports)} repo(s) have drift.")
     return 0
