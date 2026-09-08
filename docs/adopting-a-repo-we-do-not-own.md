@@ -120,19 +120,30 @@ the audit's `baseline-only-repos` input by hand.
 
 ## Register of external adopters
 
-| Repository | Visibility | Adopted | Pin | Dependabot | Who acts on findings |
-| ---| ---| ---| ---| ---| --- |
-| `EmberAssetManagement/ecp-frontend` | private | 2026-09-01 | `v1.1.0` → `v1.2.1` 2026-09-07 | yes, 2026-09-07 | Ember, on the Supabase key rotation |
-| `Westwise-Group/analytics-clickhouse-pipelines` | private | **not yet — PR staged, reopened live on 2026-09-09** | `v1.3.0` | in the same PR | **unassigned** — 33 findings, one a live Google OAuth secret |
+**The register is in ClickUp, not here.** This repository is public, and a row
+names a client, one of their private repositories, and -- in the last column --
+what is currently wrong with it. That is a map of what to attack and who to
+attack it for, which is worth withholding even though no single cell is a
+secret. `no_literal_env_values.py` runs over `docs/` as well as the workflows,
+so the table cannot drift back by someone helpfully filling it in.
 
-A row that is **staged rather than adopted** says so. `analytics-clickhouse-pipelines`
-is [PR #218](https://github.com/Westwise-Group/analytics-clickhouse-pipelines/pull/218),
-closed on purpose and reopened live during the 9 September session — the branch
-survives a close, so reopening re-runs the scan in front of the room. Until it
-merges the repository has no gate, and the register should not imply otherwise.
+One row per external repository, with these columns:
 
-Keep the columns filled. `Visibility` decides whether the audit can see it at
-all; `Dependabot` decides whether the pin moves without one of us; and the last
-column is the one that decides whether any of the rest of this was worth doing
-— the first repository to adopt sat red on 26 real findings for a week while it
-read `unassigned`.
+| Column | Why it earns a column |
+|---|---|
+| Repository | which one, exactly -- an org can have several |
+| Visibility | decides whether the audit can see it at all, per the paragraph above |
+| Adopted | the date the gate **merged**, not the date the pull request opened |
+| Pin | which `actions` version, and when it last moved |
+| Dependabot | whether that pin moves without one of us |
+| Who acts on findings | a named person or team |
+
+**The last column decides whether any of the rest of this was worth doing.**
+The first repository to adopt sat red on 26 real findings for a week while that
+cell read `unassigned` -- the scan worked perfectly and nobody was on the other
+end of it. A row is not finished until it names somebody.
+
+A row that is **staged rather than adopted** must say so. A branch survives a
+closed pull request, so a staged adoption can be reopened later to re-run the
+scan live -- but until it merges the repository has no gate, and the register
+must not imply otherwise.
