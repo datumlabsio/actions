@@ -16,6 +16,18 @@ map is worth withholding even when every road on it is public.
 Enforced rather than remembered, because "be careful forever" is not a control.
 
     python3 tests/no_literal_env_values.py .github/workflows
+    python3 tests/no_literal_env_values.py docs
+
+PROSE IS THE HARDER HALF. A workflow names a client by accident; a document
+names one because the sentence reads better with it, and a register of adopters
+is *made* of client names. The rule does not bend for that -- client identity
+lives in ClickUp, and a public document describes the shape of the register
+rather than its rows.
+
+Comment syntax is per file type and NOT shared. `# ` starts a comment in YAML
+and a heading in Markdown, so the allowance for "a comment explaining the rule
+itself" applies to YAML only. Shared, it would have silently exempted every
+top-level Markdown heading -- the most prominent line on the page.
 """
 
 from __future__ import annotations
@@ -55,8 +67,13 @@ RULES: list[tuple[str, re.Pattern[str], str]] = [
     ),
     (
         "client name",
+        # NO trailing \b. A client's GitHub org glues the name to more text --
+        # `EmberAssetManagement`, `WestwiseGroup` -- and with a trailing
+        # boundary those escaped: the register row was caught only by the bare
+        # `Ember` later on the same line. The leading \b is kept, so `member`
+        # and `remember` are not clients.
         re.compile(
-            r"\b(?:westwise|ember|vero|pitchlane|synthflow|voltera|swantje)\b",
+            r"\b(?:westwise|ember|vero|pitchlane|synthflow|voltera|swantje)",
             re.I,
         ),
         "a client never appears in shared CI; use a neutral fixture name",
@@ -71,22 +88,28 @@ ALLOW = re.compile(
     | github\.com/[\w.-]+/[\w.-]+/releases   # pinned tool downloads
     | pypi\.org
     | @[0-9a-f]{40}\b                # a SHA-pinned action
-    | ^\s*\#\s                       # a comment explaining the rule itself
     """,
     re.X,
 )
 
+# A comment explaining the rule itself. YAML ONLY: in Markdown this is a
+# heading, and exempting headings would exempt the loudest line on the page.
+YAML_COMMENT = re.compile(r"^\s*\#\s")
+YAML_SUFFIXES = {".yml", ".yaml"}
+SUFFIXES = YAML_SUFFIXES | {".md"}
+
 
 def scan(root: Path) -> list[str]:
     findings: list[str] = []
-    files = sorted(root.rglob("*.yml")) + sorted(root.rglob("*.yaml"))
+    files = sorted(p for p in root.rglob("*") if p.suffix in SUFFIXES and p.is_file())
     if not files:
-        findings.append(f"no workflow files found under {root}")
+        findings.append(f"no .yml, .yaml or .md files found under {root}")
         return findings
 
     for path in files:
+        yaml = path.suffix in YAML_SUFFIXES
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if ALLOW.search(line):
+            if ALLOW.search(line) or (yaml and YAML_COMMENT.search(line)):
                 continue
             for name, pattern, fix in RULES:
                 if pattern.search(line):
@@ -101,7 +124,7 @@ def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".github/workflows")
     findings = scan(root)
     if findings:
-        print("::error::A workflow hardcodes something environment-specific.")
+        print("::error::A file hardcodes something environment-specific.")
         print("This repo is public; these arrive as inputs or org variables.")
         for f in findings:
             print(f"  {f}")
