@@ -472,16 +472,177 @@ jobs:
           DATUM_PLACEHOLDER_FILTER
           python3 "$RUNNER_TEMP/placeholder_keys.py" "$RUNNER_TEMP/semgrep.json"
 
+      # "See the scan output above" pointed at 782 log lines that reprinted every
+      # rule's full description once per occurrence --
+      # The first adopted client repo read as 33 separate
+      # problems and was 8 rules. Nobody scrolls that, and the finding that
+      # mattered looked exactly like the thirty that did not.
+      #
+      # Grouped by WHAT IT TAKES TO FIX, not by severity, because severity does
+      # not answer a reviewer's first question. A mutable action tag and a raw
+      # SQL query are both ERROR; one is a one-line change.
+      #
+      # INLINED rather than vendored, like the private-key filter above. A
+      # vendored copy would reach a repository only after it re-vendors, and the
+      # repositories that most need this are the ones just adopting.
       - name: Decide the result
+        env:
+          SEMGREP_JSON: ${{ runner.temp }}/semgrep.json
         run: |
           set -euo pipefail
-          n=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["results"]))' \
-            "$RUNNER_TEMP/semgrep.json")
-          if [ "$n" -gt 0 ]; then
-            echo "::error::Semgrep: $n finding(s). See the scan output above."
-            exit 1
-          fi
-          echo "::notice::Semgrep: no findings."
+          python3 - <<'DATUM_SEMGREP_REPORT'
+          #!/usr/bin/env python3
+          """Turn a Semgrep JSON run into something a person can act on.
+
+              python3 semgrep-report.py <semgrep.json>
+
+          Semgrep's own output reprints a rule's full description for EVERY occurrence.
+          The first client repo we adopted came back as 782 log lines
+          reading like 33 separate problems. It was 8 rules. Nobody scrolls that, and the
+          one finding that mattered looked exactly like the thirty that did not.
+
+          GROUPED BY WHAT IT TAKES TO FIX, not by rule or severity. A reviewer's first
+          question is "where do I start", and severity does not answer it: a mutable
+          action tag is a one-line change, and a raw SQL query is an afternoon. Both are
+          ERROR.
+
+          Three buckets, and the ordering of the checks matters:
+
+            one command   Semgrep ships an autofix for the rule. Data, not opinion.
+            mechanical    deterministic to fix but Semgrep will not do it -- a short
+                          curated list, because this is NOT in the output
+            needs review  everything else
+
+          UNKNOWN DEFAULTS TO `needs review`. The curated list is the one part of this
+          that can go stale, and it must go stale in the safe direction: a rule nobody has
+          classified is presented as needing a human, never as a quick win. A wrong
+          "mechanical" label sends somebody to run a script over a problem that needed
+          reading.
+          """
+          from __future__ import annotations
+
+          import collections
+          import json
+          import os
+          import sys
+
+          # Deterministic to fix, but Semgrep offers no autofix. Keep this SHORT: every
+          # entry is a promise that a script can do it, and being wrong here is worse than
+          # leaving a rule in `needs review`.
+          MECHANICAL = {
+              "github-actions-mutable-action-tag":
+                  "pin each `uses:` to a 40-character commit SHA",
+          }
+
+          ONE_COMMAND = "one command"
+          MECHANICAL_B = "mechanical"
+          REVIEW = "needs review"
+          ORDER = [REVIEW, MECHANICAL_B, ONE_COMMAND]  # worst first, in the summary
+
+
+          def bucket(result: dict) -> tuple[str, str]:
+              """(bucket, how) for one finding."""
+              if result.get("extra", {}).get("fix"):
+                  return ONE_COMMAND, "`semgrep scan --autofix`"
+              rule = result.get("check_id", "")
+              for frag, how in MECHANICAL.items():
+                  if frag in rule:
+                      return MECHANICAL_B, how
+              return REVIEW, "read the code and decide"
+
+
+          def short(rule: str) -> str:
+              """`a.b.c.detected-generic-secret.detected-generic-secret` -> the last unique part."""
+              parts = [p for p in rule.split(".") if p]
+              if len(parts) >= 2 and parts[-1] == parts[-2]:
+                  parts = parts[:-1]
+              return parts[-1] if parts else rule
+
+
+          def main() -> int:
+              doc = json.load(open(os.environ["SEMGREP_JSON"]))
+              results = doc.get("results", [])
+
+              if not results:
+                  print("::notice::Semgrep: no findings.")
+                  return 0
+
+              # rule -> {bucket, how, [ (path, line) ]}
+              by_rule: dict[str, dict] = {}
+              for r in results:
+                  rule = r.get("check_id", "?")
+                  b, how = bucket(r)
+                  e = by_rule.setdefault(rule, {"bucket": b, "how": how, "hits": [],
+                                                "message": (r.get("extra") or {}).get("message", "")})
+                  e["hits"].append((r.get("path", "?"), (r.get("start") or {}).get("line", 0)))
+
+              counts = collections.Counter(v["bucket"] for v in by_rule.values())
+              n_find = len(results)
+              n_rule = len(by_rule)
+
+              out = []
+              out.append("### security-baseline / semgrep")
+              out.append("")
+              out.append(f"**{n_find} finding{'s' if n_find != 1 else ''} across "
+                         f"{n_rule} rule{'s' if n_rule != 1 else ''}.** "
+                         "Grouped by what it takes to fix, not by severity — "
+                         "a mutable action tag and a raw SQL query are both ERROR, "
+                         "and only one of them is a one-line change.")
+              out.append("")
+
+              for b in ORDER:
+                  rules = {k: v for k, v in by_rule.items() if v["bucket"] == b}
+                  if not rules:
+                      continue
+                  n = sum(len(v["hits"]) for v in rules.values())
+                  heading = {
+                      REVIEW: "Needs a decision",
+                      MECHANICAL_B: "Mechanical — scriptable, but nothing does it for you",
+                      ONE_COMMAND: "Fixable with one command",
+                  }[b]
+                  out.append(f"#### {heading} — {n} finding{'s' if n != 1 else ''}, "
+                             f"{len(rules)} rule{'s' if len(rules) != 1 else ''}")
+                  out.append("")
+                  out.append("| rule | hits | where | to fix |")
+                  out.append("|---|---:|---|---|")
+                  for rule, v in sorted(rules.items(), key=lambda kv: -len(kv[1]["hits"])):
+                      files = sorted({p for p, _ in v["hits"]})
+                      where = ", ".join(f"`{f}`" for f in files[:3])
+                      if len(files) > 3:
+                          where += f" +{len(files) - 3} more"
+                      out.append(f"| `{short(rule)}` | {len(v['hits'])} | {where} | {v['how']} |")
+                  out.append("")
+
+              # The one-line version, for anyone who reads only the first sentence.
+              quick = counts[ONE_COMMAND] + counts[MECHANICAL_B]
+              out.append(f"**{quick} of {n_rule} rules can be fixed without reading the code.** "
+                         f"Start with those; they are the cheapest way to shorten this list.")
+
+              summary = os.environ.get("GITHUB_STEP_SUMMARY")
+              text = "\n".join(out)
+              if summary:
+                  with open(summary, "a") as fh:
+                      fh.write(text + "\n")
+              else:
+                  print(text)
+
+              # Annotations land on the exact line in the pull request diff. GitHub shows
+              # about ten per step and truncates the rest, so `needs review` is emitted
+              # FIRST -- the ones a person has to think about are the ones worth the slots.
+              for b in ORDER:
+                  for rule, v in sorted(
+                          ((k, v) for k, v in by_rule.items() if v["bucket"] == b),
+                          key=lambda kv: -len(kv[1]["hits"])):
+                      for path, line in v["hits"]:
+                          print(f"::error file={path},line={line},"
+                                f"title={short(rule)} [{b}]::{v['message'][:180]}")
+
+              print(f"::error::Semgrep: {n_find} finding(s) across {n_rule} rule(s). "
+                    "The run summary groups them by what it takes to fix.")
+              return 1
+
+          raise SystemExit(main())
+          DATUM_SEMGREP_REPORT
 
       # A security gate that runs DEGRADED is the worst of the three states: it is
       # green, it did something, and what it did is not what the caller assumes.

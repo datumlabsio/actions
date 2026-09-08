@@ -177,6 +177,9 @@ jobs:
       - name: Expiry passes, never fails, and fails open
         run: python3 tests/release_expiry.py
 
+      - name: Findings group by fixability, and unknown needs review
+        run: python3 tests/semgrep_report.py
+
   # docs-ci run against this repo, with every optional check switched on, so a
   # change to any of them is exercised here first.
   docs-ci:
