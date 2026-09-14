@@ -192,6 +192,9 @@ jobs:
       - name: A secret gets filed once, and the issue never carries it
         run: python3 tests/violation_filing.py
 
+      - name: A conflicted scaffold update cannot look clean
+        run: python3 tests/scaffold_update_conflicts.py
+
   # docs-ci run against this repo, with every optional check switched on, so a
   # change to any of them is exercised here first.
   docs-ci:
