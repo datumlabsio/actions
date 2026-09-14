@@ -189,6 +189,9 @@ jobs:
       - name: Findings group by fixability, and unknown needs review
         run: python3 tests/semgrep_report.py
 
+      - name: A secret gets filed once, and the issue never carries it
+        run: python3 tests/violation_filing.py
+
   # docs-ci run against this repo, with every optional check switched on, so a
   # change to any of them is exercised here first.
   docs-ci:
