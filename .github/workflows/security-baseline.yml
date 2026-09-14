@@ -78,6 +78,27 @@ on:
           Every suppression is printed. Set false for raw Semgrep output.
         type: boolean
         default: true
+      violation-repo:
+        description: >-
+          Where a confirmed secret is filed, in this repository's own
+          organisation. It MUST be a private repository: the issue names which
+          repo has a live credential in it, and that sentence is worth as much
+          to an attacker as the credential itself.
+        type: string
+        default: "dev-ops"
+
+    secrets:
+      # Both optional, and the job says so and exits 0 when they are absent.
+      # Every external adopter calls this workflow with no secrets at all, and a
+      # required secret would turn "we do not alert here" into a red build on
+      # somebody else's pull request -- for a repository we cannot file against
+      # anyway.
+      violation-app-id:
+        description: "App that may only open issues in `violation-repo`."
+        required: false
+      violation-private-key:
+        description: "Its private key. Absent means this repository does not file."
+        required: false
 
 permissions:
   contents: read
@@ -810,6 +831,106 @@ jobs:
           if [ -n "$notes" ]; then
             echo "::warning::Ran degraded: ${notes}"
           fi
+
+  # A blocked merge is not the whole remedy. By the time this job runs the
+  # secret has been PUSHED, so it exists in a branch on GitHub whether or not
+  # the pull request ever merges -- and the only fix is rotation. Nothing about
+  # a red check says that out loud, or says it to anyone who is not the author.
+  #
+  # So a confirmed secret is filed as an issue in a PRIVATE repository, which is
+  # what turns it into a Slack alert and, more usefully, into a record with an
+  # owner. A Slack message scrolls away. An open issue does not.
+  #
+  # SEPARATE JOB, not a step in `secrets`, for the same reason drift-watch keeps
+  # its alert apart: if filing fails, `secrets` must still be red. An alerting
+  # path that can mask the finding it is alerting on is worse than none.
+  violation:
+    needs: secrets
+    if: ${{ always() && needs.secrets.result == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Can this repository file at all?
+        id: creds
+        env:
+          APP_ID: ${{ secrets.violation-app-id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_ID:-}" ]; then
+            echo "::notice::No filing credentials here, so nothing was filed."
+            echo "::notice::This is normal outside datumlabsio. The check still failed, which is the part that blocks."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint a token that can only open issues
+        id: token
+        if: steps.creds.outputs.present == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.violation-app-id }}
+          private-key: ${{ secrets.violation-private-key }}
+          owner: ${{ github.repository_owner }}
+          # Scoped to the one repository it files into. The key is readable by
+          # every repository in the org, so the token it can mint is the real
+          # boundary -- and this is it.
+          repositories: ${{ inputs.violation-repo }}
+
+      - name: File it, once
+        if: steps.creds.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          MAILBOX: ${{ github.repository_owner }}/${{ inputs.violation-repo }}
+          SOURCE: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # WHAT IS NOT IN HERE: the secret, the matched line, the file it was
+          # found in, and any gitleaks output at all. gitleaks redacts, but
+          # redaction is a promise about a format and this is a durable record
+          # in a repository more people can read than can read the source. The
+          # pull request already holds the detail for whoever needs it.
+          title="Secret detected · ${SOURCE}#${PR}"
+
+          # A pull request that is pushed five times fails five times. Without
+          # this, that is five identical issues and a channel people mute.
+          existing=$(gh issue list -R "$MAILBOX" \
+            --state open --label secret-finding --search "$title in:title" \
+            --json number,title \
+            --jq "[.[] | select(.title == \"$title\")] | .[0].number // empty")
+
+          if [ -n "$existing" ]; then
+            echo "::notice::Already filed as ${MAILBOX}#${existing}; not filing again."
+            exit 0
+          fi
+
+          body=$(cat <<EOF
+          A secret was detected in a pull request and the merge is blocked.
+
+          | | |
+          |---|---|
+          | Repository | \`${SOURCE}\` |
+          | Pull request | ${PR_URL} |
+          | Check | ${RUN_URL} |
+
+          **Rotate the credential first, then remove it.**
+
+          It has already been pushed, so it is in a branch on GitHub whether or not this pull request ever merges.
+          Deleting the line does not delete it — git keeps every version.
+          Rotation is the only thing that makes the old value worthless.
+
+          Close this issue once the credential has been rotated.
+          Not when the pull request is fixed — those are different things.
+          EOF
+          )
+
+          url=$(gh issue create -R "$MAILBOX" \
+            --title "$title" --label secret-finding --body "$body")
+          echo "::notice::Filed ${url}"
 
   dependencies:
     needs: age
