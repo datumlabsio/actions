@@ -52,8 +52,15 @@ def extract(dest: Path) -> Path:
     return out
 
 
-def run(results: list[dict] | None = None) -> tuple[int, str, str]:
-    """Returns (exit code, job summary, annotation stream). Kept apart on purpose."""
+def run(results: list[dict] | None = None,
+        env: dict[str, str | None] | None = None) -> tuple[int, str, str]:
+    """Returns (exit code, job summary, annotation stream). Kept apart on purpose.
+
+    `env` overlays the child's environment; a None value REMOVES the variable.
+    Passed explicitly rather than mutated on os.environ, because this suite runs
+    inside GitHub Actions -- which sets GITHUB_RUN_ID and friends itself. Saving
+    and restoring os.environ therefore restored the REAL values, and the "no
+    link when we cannot build one" case passed locally and failed in CI."""
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
         doc = {"results": results if results is not None
@@ -61,11 +68,12 @@ def run(results: list[dict] | None = None) -> tuple[int, str, str]:
         j = d / "semgrep.json"
         j.write_text(json.dumps(doc))
         summary = d / "summary.md"
-        r = subprocess.run(
-            [sys.executable, str(extract(d))],
-            env={**os.environ, "SEMGREP_JSON": str(j),
-                 "GITHUB_STEP_SUMMARY": str(summary)},
-            capture_output=True, text=True)
+        child = {**os.environ, "SEMGREP_JSON": str(j),
+                 "GITHUB_STEP_SUMMARY": str(summary)}
+        for k, v in (env or {}).items():
+            child.pop(k, None) if v is None else child.__setitem__(k, v)
+        r = subprocess.run([sys.executable, str(extract(d))], env=child,
+                           capture_output=True, text=True)
         if r.returncode not in (0, 1):
             sys.exit(f"FAIL: the report crashed (exit {r.returncode}):\n{r.stderr}")
         return r.returncode, (summary.read_text() if summary.exists() else ""), r.stdout
@@ -195,21 +203,22 @@ check("...and the clip is near the cap, not far short of it",
       170 <= len(tail) <= 190, str(len(tail)))
 
 # --- the link, because the failing check points at the wrong page ---------
-import os as _os  # noqa: E402
-_env = {"GITHUB_SERVER_URL": "https://github.com",
-        "GITHUB_REPOSITORY": "datumlabsio/example", "GITHUB_RUN_ID": "12345"}
-_old = {k: _os.environ.get(k) for k in _env}
-_os.environ.update(_env)
-_, _, ann4 = run([finding("a.b.c")])
+_, _, ann4 = run([finding("a.b.c")], env={
+    "GITHUB_SERVER_URL": "https://github.com",
+    "GITHUB_REPOSITORY": "datumlabsio/example", "GITHUB_RUN_ID": "12345"})
 check("the final error links the RUN page, where the tables actually are",
       "https://github.com/datumlabsio/example/actions/runs/12345" in ann4
       and "not on this log page" in ann4, ann4.splitlines()[-1][:160])
-for k, v in _old.items():
-    _os.environ.pop(k, None) if v is None else _os.environ.__setitem__(k, v)
-_, _, ann5 = run([finding("a.b.c")])
+_, _, ann5 = run([finding("a.b.c")], env={
+    "GITHUB_SERVER_URL": None, "GITHUB_REPOSITORY": None, "GITHUB_RUN_ID": None})
 check("...and says the same thing without a link when it cannot build one",
       "/actions/runs/" not in ann5 and "RUN summary" in ann5,
       ann5.splitlines()[-1][:160])
+_, _, ann6 = run([finding("a.b.c")], env={
+    "GITHUB_SERVER_URL": "https://github.com",
+    "GITHUB_REPOSITORY": "datumlabsio/example", "GITHUB_RUN_ID": None})
+check("...and a half-set environment gets no link either, not a broken one",
+      "/actions/runs/" not in ann6, ann6.splitlines()[-1][:160])
 
 # --- exit codes -----------------------------------------------------------
 check("findings fail the job", code == 1, f"exit {code}")
