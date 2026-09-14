@@ -6,7 +6,7 @@ We run some CI on our own hardware. This is how, and — more importantly — wh
 
 ## The three rules
 
-**Never a public repository.** `actions`, `.github`, `LibreChat`, `pitchlane` and `swantje` are public. Anyone with a GitHub account can open a pull request on them, and on a self-hosted runner that pull request's code executes on our network. Public minutes are also **already free**, so the security constraint and the economics agree — there is no reason to want this.
+**Never a public repository.** Several of ours are, this one included. Anyone with a GitHub account can open a pull request on a public repository, and on a self-hosted runner that pull request's code executes on our network. Public minutes are also **already free**, so the security constraint and the economics agree — there is no reason to want this.
 
 **Ephemeral, always.** One job per runner registration, then exit and re-register. A reused runner is a machine where the next job can read the previous job's checkout, tokens and `/tmp`. Persistent runners are faster because caches survive; that is the same reason they are unsafe.
 

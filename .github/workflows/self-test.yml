@@ -55,7 +55,16 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: No hardcoded accounts, hosts, addresses or client names
-        run: python3 tests/no_literal_env_values.py .github/workflows
+        run: |
+          python3 tests/no_literal_env_values.py .github/workflows
+          python3 tests/no_literal_env_values.py docs
+
+      # Prose is the harder half: a workflow names a client by accident, a
+      # document names one because the sentence reads better. `#` is a comment
+      # in YAML and a HEADING in Markdown, and the shared allowance for the
+      # former silently exempted every level-one heading.
+      - name: The gate reads prose, and reads `#` per file type
+        run: python3 tests/literal_values_gate.py
 
       # The ban is inlined in workflows-ci because a reusable workflow only
       # checks out the CALLER's repository. The test extracts it from there
