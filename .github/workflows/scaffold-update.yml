@@ -214,10 +214,23 @@ jobs:
           uvx --from "copier==$COPIER_VERSION" copier update \
             --trust --defaults --vcs-ref "$TAG"
 
-          # A conflicting update leaves .rej files. The pull request still opens —
-          # a human resolving a conflict is the point — but it must say so.
+          # A conflicting update still opens a pull request — a human resolving a
+          # conflict is the point — but it MUST say so, and the run must not look
+          # like an ordinary one.
+          #
+          # .rej files were the only thing counted here, and copier does not
+          # write them: since copier 9 the default is INLINE markers, the same
+          # `<<<<<<<` git leaves. So every conflicting update was reported as
+          # clean. dl-assessment-platform pushed a datum-ci.yml containing
+          # `<<<<<<< before updating` and the run was green.
           rejects=$(git status --porcelain | grep -c '\.rej$' || true)
+          conflicts=$(grep -rlE '^(<<<<<<<|>>>>>>>) ' . --exclude-dir=.git \
+            | wc -l | tr -d ' ')
           echo "rejects=$rejects" >> "$GITHUB_OUTPUT"
+          echo "conflicts=$conflicts" >> "$GITHUB_OUTPUT"
+          if [ "$conflicts" != "0" ] || [ "$rejects" != "0" ]; then
+            echo "::warning::The update conflicted: $conflicts file(s) with markers, $rejects .rej file(s). The pull request needs a human."
+          fi
 
           if [ -z "$(git status --porcelain)" ]; then
             echo "::notice::$TAG changed nothing in this repo."
@@ -235,6 +248,7 @@ jobs:
           REPO: ${{ steps.current.outputs.repo }}
           BRANCH: ${{ inputs.branch }}
           REJECTS: ${{ steps.render.outputs.rejects }}
+          CONFLICTS: ${{ steps.render.outputs.conflicts }}
         run: |
           set -euo pipefail
 
@@ -252,11 +266,12 @@ jobs:
             echo
             echo "Released at: https://github.com/$REPO/releases/tag/$TAG"
             echo
-            if [ "$REJECTS" != "0" ]; then
-              echo "> [!WARNING]"
-              echo "> The update conflicted. **$REJECTS \`.rej\` file(s)** are included and"
-              echo "> must be resolved by hand before merging. A conflict means this repo"
-              echo "> edited something the scaffold owns."
+            if [ "$CONFLICTS" != "0" ] || [ "$REJECTS" != "0" ]; then
+              echo "> [!CAUTION]"
+              echo "> **Do not merge this as-is.** The update conflicted:"
+              echo "> **$CONFLICTS file(s) contain conflict markers** and **$REJECTS \`.rej\` file(s)**"
+              echo "> are included. Both have to be resolved by hand. A conflict means this"
+              echo "> repository edited something the scaffold owns."
               echo
             fi
             echo "Opened by \`scaffold-update\`, which runs weekly. If this sits unmerged"
@@ -264,11 +279,29 @@ jobs:
             echo "the current default branch."
           } > /tmp/pr-body.md
 
-          if gh pr view "$BRANCH" --json number -q .number >/dev/null 2>&1; then
-            gh pr edit "$BRANCH" --title "chore: take scaffold $TAG" --body-file /tmp/pr-body.md
-            echo "::notice::Updated the open pull request to $TAG."
+          title="chore: take scaffold $TAG"
+          if [ "$CONFLICTS" != "0" ] || [ "$REJECTS" != "0" ]; then
+            # In the title, not only the body. Nobody opens the body of a
+            # scaffold bump -- they merge it from the list.
+            title="chore: take scaffold $TAG — CONFLICTED, needs a human"
+          fi
+
+          # `gh pr view <branch>` matches CLOSED and MERGED pull requests too. On
+          # a branch that is force-pushed every week that is not a lookup, it is
+          # a time bomb: the first run after a bump is merged finds the merged
+          # pull request, edits it, and reports "updated the open pull request".
+          # The real update never gets one, and the merged record is rewritten to
+          # describe a version it did not carry. That happened on
+          # dl-assessment-platform#483 -- merged, then retitled to a tag it never
+          # contained. Only an OPEN pull request is a pull request to update.
+          open_pr=$(gh pr list --head "$BRANCH" --state open \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "$open_pr" ]; then
+            gh pr edit "$open_pr" --title "$title" --body-file /tmp/pr-body.md
+            echo "::notice::Updated open pull request #$open_pr to $TAG."
           else
             gh pr create --head "$BRANCH" \
-              --title "chore: take scaffold $TAG" --body-file /tmp/pr-body.md
+              --title "$title" --body-file /tmp/pr-body.md
             echo "::notice::Opened a pull request taking $TAG."
           fi
