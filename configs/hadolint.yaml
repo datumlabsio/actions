@@ -1,0 +1,44 @@
+# datum-config: hadolint v1
+# Vendored from datumlabsio/actions/configs/hadolint.yaml. Bump it, do not edit
+# it.
+#
+# Read by container-ci's lint stage as `hadolint --config <this file>`, from
+# the repo's own copy in its config-dir. ABSENT IS FINE: a repo that has not
+# vendored this gets hadolint's built-in defaults, exactly as before this file
+# existed.
+#
+# ===========================================================================
+# DL3008 — "Pin versions in apt get install"
+# ===========================================================================
+#
+# WAIVED, with the reason written down, because DES §5 says a config may not be
+# weakened without one.
+#
+# The rule is not wrong about the risk. `apt-get install git` resolves against
+# the live Debian archive, so two builds of the SAME COMMIT can install
+# different package versions — real non-determinism, and pinning the base image
+# by digest does not close it.
+#
+# It is waived anyway because the cure is worse here, and measurably so. An
+# exact pin like `libpq-dev=17.11-0+deb13u1` stops resolving the moment Debian
+# issues a point release: the archive keeps only current versions, so the build
+# fails with `Version '...' for 'libpq-dev' was not found` — on a commit nobody
+# touched, at a time nobody chose. Nothing bumps apt pins for us. Renovate does
+# not read Dockerfiles for Debian versions, so every pin is a hand edit
+# scheduled by a broken build.
+#
+# That trades occasional silent drift in a build-time package for a fleet-wide
+# outage on somebody else's release schedule. Reproducibility that breaks the
+# build is not reproducibility.
+#
+# WHAT WE DO INSTEAD, and why this is not simply giving up:
+#   - base images are pinned by DIGEST, which DL3006 enforces and which fixes
+#     the far larger surface — the distro, the interpreter, the system libs
+#   - the SBOM records exactly what was installed in the image that shipped, so
+#     a build IS reproducible after the fact even when it was not fixed before
+#   - Trivy scans that image, so a package that drifts into a vulnerability is
+#     caught by the scanner rather than by a version string
+#
+# If the fleet ever gets apt-pin automation, delete this waiver and bump.
+ignored:
+  - DL3008

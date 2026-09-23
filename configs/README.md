@@ -17,6 +17,7 @@ The rule that makes this work is the same one RFC-0010 set for `.claude/`: a ven
 | `ruff.toml` | every Python repo | `ruff check`, `ruff format` |
 | `mypy.ini` | every Python repo | `mypy` |
 | `tool-versions.txt` | every Python repo | `python-ci`, and `uv run --with-requirements` locally |
+| `hadolint.yaml` | every repo with a Dockerfile | `container-ci`'s lint stage, and `hadolint` locally |
 
 ## Changing one
 

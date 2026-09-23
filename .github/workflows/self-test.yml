@@ -647,6 +647,22 @@ jobs:
       build-args: |
         PROFILE=heavy
 
+  # The vendored hadolint config, against a fixture whose Dockerfile hadolint
+  # REFUSES by default. Its `apt-get install` is deliberately unpinned — DL3008,
+  # the one rule configs/hadolint.yaml waives — and everything else about it is
+  # clean, so a pass can only come from the config having been found and
+  # applied. If `--config` ever stops being passed, this job fails rather than
+  # going green on a file nothing reads.
+  container-ci-hadolint-config:
+    uses: ./.github/workflows/container-ci.yml
+    # Same startup-time grant as the jobs above: permission is checked before
+    # any `if:`, so a skipped publish job still has to be grantable.
+    permissions:
+      contents: read
+      packages: write
+    with:
+      working-directory: tests/fixtures/container-hadolint-config
+
   # And the negative case. hadolint has to refuse the bad Dockerfile, so this
   # runs it directly rather than through the workflow — a `uses:` job cannot be
   # continue-on-error, so a job meant to fail would just fail the run.
