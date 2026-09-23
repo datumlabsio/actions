@@ -630,6 +630,23 @@ jobs:
     with:
       working-directory: tests/fixtures/container-ok
 
+  # build-args, against a fixture that REFUSES TO BUILD without them. The
+  # assertion is the build itself: if the input ever stops being threaded into
+  # `docker build`, this job fails rather than going green on a feature that
+  # silently does nothing. publish stays false here as everywhere in self-test.
+  container-ci-build-args:
+    uses: ./.github/workflows/container-ci.yml
+    # Same startup-time grant as container-ci above, and for the same reason:
+    # permission is checked before any `if:`, so a skipped publish job still
+    # has to be grantable.
+    permissions:
+      contents: read
+      packages: write
+    with:
+      working-directory: tests/fixtures/container-build-args
+      build-args: |
+        PROFILE=heavy
+
   # And the negative case. hadolint has to refuse the bad Dockerfile, so this
   # runs it directly rather than through the workflow — a `uses:` job cannot be
   # continue-on-error, so a job meant to fail would just fail the run.
