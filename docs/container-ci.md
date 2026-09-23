@@ -41,9 +41,27 @@ Set `gate-on: CRITICAL` once the real number is known. Same phase-in as §11 cov
 | `sbom` | `true` | syft, SPDX, kept 30 days |
 | `scan-severity` | `HIGH,CRITICAL` | what Trivy **reports** |
 | `gate-on` | *(empty)* | what **fails** the build |
+| `build-args` | *(empty)* | `KEY=VALUE` per line, into **both** builds |
 | `publish` | `false` | only ever true on the default branch |
 
 `publish` defaults to false deliberately. A pull request from a fork must not be able to push an image.
+
+### `build-args`
+
+One `KEY=VALUE` per line. Blank lines are ignored, and a value may contain spaces.
+
+```yaml
+with:
+  image-name: polaris-introspector-heavy
+  build-args: |
+    PROFILE=heavy
+```
+
+It exists for an image with **more than one shape from one Dockerfile** — a lean build and a heavy one carrying extra SDKs, say. Without it the only way to publish the second shape is a duplicated Dockerfile, which drifts from the first in a way nobody notices until the two disagree.
+
+The args go to the scanned build **and** the published build, because those must be the same image. Passing a profile to one and not the other would publish a variant nothing had scanned while the run still went green.
+
+**Never pass a secret.** A build argument is recorded in the image's own metadata, and `docker history` prints it back out of any pulled copy — a token passed here ships to everyone who can pull the image. Use it for build-time *shape*: a profile, a variant, a feature flag. Nothing that would matter if it were published, because it is.
 
 ## One thing that will bite on a bump
 
