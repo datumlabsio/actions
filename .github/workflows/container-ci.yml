@@ -144,7 +144,22 @@ jobs:
             "https://github.com/hadolint/hadolint/releases/download/v${v}/hadolint-linux-x86_64"
           chmod +x /tmp/hadolint
           /tmp/hadolint --version
-          /tmp/hadolint "$DOCKERFILE"
+
+          # The org's shared rule set, from the repo's OWN copy — same
+          # vendoring as container-tool-versions.txt above, so a developer
+          # running hadolint locally reads the file CI reads.
+          #
+          # ABSENT IS FINE AND MEANS UNCHANGED. A repo that has not vendored it
+          # gets hadolint's built-in defaults, which is exactly what every
+          # caller got before this file existed. Adding a config is opt-in, in
+          # the same way this repo adds every other check.
+          cfg="$CONFIG_DIR/hadolint.yaml"
+          if [ -f "$cfg" ]; then
+            echo "Using $cfg"
+            /tmp/hadolint --config "$cfg" "$DOCKERFILE"
+          else
+            /tmp/hadolint "$DOCKERFILE"
+          fi
           echo "Dockerfile is clean."
 
   build-scan:

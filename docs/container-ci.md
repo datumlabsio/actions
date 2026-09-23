@@ -63,6 +63,14 @@ The args go to the scanned build **and** the published build, because those must
 
 **Never pass a secret.** A build argument is recorded in the image's own metadata, and `docker history` prints it back out of any pulled copy — a token passed here ships to everyone who can pull the image. Use it for build-time *shape*: a profile, a variant, a feature flag. Nothing that would matter if it were published, because it is.
 
+## The hadolint config
+
+The lint stage reads `<config-dir>/hadolint.yaml` if the repo has vendored one, exactly as it reads `container-tool-versions.txt`. **Absent means unchanged** — hadolint's built-in defaults, which is what every caller got before the file existed.
+
+Vendor it the usual way: copy `configs/hadolint.yaml` from this repo, keep the `# datum-config:` stamp, and bump rather than edit. A local `hadolint` run then reads the same rules CI does.
+
+It currently waives one rule, **DL3008** (pin versions in `apt-get install`), and the file carries the written reason DES §5 requires. The short version: an exact apt pin stops resolving the moment Debian issues a point release, so the build fails on a commit nobody touched, and nothing bumps apt pins for us. Digest-pinned bases (DL3006), the SBOM and the Trivy scan cover the same ground without that failure mode.
+
 ## One thing that will bite on a bump
 
 **hadolint renamed its release assets.** v2.12.0 shipped `hadolint-Linux-x86_64`; v2.15.1 ships `hadolint-linux-x86_64` — lowercase. A version bump alone changes the download URL, and the failure is a 404 during install rather than anything that looks like a version problem.
