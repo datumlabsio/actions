@@ -24,6 +24,14 @@ name: changed-paths
 on:
   workflow_call:
     inputs:
+      runner-label:
+        description: >-
+          Runner to schedule on. See the note on the same input in python-ci;
+          the default keeps every job on GitHub-hosted runners, and the org
+          variable DATUM_RUNNER_OFFLINE overrides it.
+        type: string
+        default: "ubuntu-latest"
+
       paths:
         description: >-
           Space-separated top-level folders to test. A folder counts as changed
@@ -58,7 +66,7 @@ permissions:
 
 jobs:
   detect:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.DATUM_RUNNER_OFFLINE == 'true' && 'ubuntu-latest' || inputs.runner-label }}
     outputs:
       changed: ${{ steps.detect.outputs.changed }}
       any: ${{ steps.detect.outputs.any }}

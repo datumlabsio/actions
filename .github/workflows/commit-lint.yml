@@ -29,6 +29,14 @@ name: commit-lint
 on:
   workflow_call:
     inputs:
+      runner-label:
+        description: >-
+          Runner to schedule on. See the note on the same input in python-ci;
+          the default keeps every job on GitHub-hosted runners, and the org
+          variable DATUM_RUNNER_OFFLINE overrides it.
+        type: string
+        default: "ubuntu-latest"
+
       enabled:
         description: >-
           Off switch. This lives here rather than as an `if:` on the caller's
@@ -48,7 +56,7 @@ permissions:
 
 jobs:
   title:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.DATUM_RUNNER_OFFLINE == 'true' && 'ubuntu-latest' || inputs.runner-label }}
     # Both conditions belong here, not on the caller. Guarding inside means the
     # job is always CALLED and skips itself — same outcome for a reader, and it
     # does not break startup.
