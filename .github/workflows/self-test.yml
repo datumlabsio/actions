@@ -195,6 +195,9 @@ jobs:
       - name: A conflicted scaffold update cannot look clean
         run: python3 tests/scaffold_update_conflicts.py
 
+      - name: A dead runner cannot block a merge, and a secret stays hosted
+        run: python3 tests/runner_label_kill_switch.py
+
   # docs-ci run against this repo, with every optional check switched on, so a
   # change to any of them is exercised here first.
   docs-ci:

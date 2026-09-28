@@ -24,6 +24,22 @@ name: security-baseline
 on:
   workflow_call:
     inputs:
+      runner-label:
+        description: >-
+          Runner to schedule on. Leave at the default and every job runs on
+          GitHub-hosted runners. Set it to a self-hosted label (datumlabsio
+          uses "datum") only for a repo whose runner group actually grants
+          that runner — a label no runner answers queues the job for 24
+          hours rather than failing it.
+
+          The org variable DATUM_RUNNER_OFFLINE is a kill switch over the
+          top: while it is "true", every job here goes back to
+          ubuntu-latest regardless of this input, so a dead runner does not
+          stop merges. .github/workflows/runner-watch.yml keeps that
+          variable honest; nothing here needs a credential to read it.
+        type: string
+        default: "ubuntu-latest"
+
       semgrep:
         description: "Static analysis. A finding fails the job."
         type: boolean
@@ -123,7 +139,7 @@ jobs:
   #
   # No network call. The date travels inside the file they already pinned.
   age:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.DATUM_RUNNER_OFFLINE == 'true' && 'ubuntu-latest' || inputs.runner-label }}
     outputs:
       expired: ${{ steps.check.outputs.expired }}
     steps:
@@ -205,7 +221,7 @@ jobs:
   semgrep:
     needs: age
     if: ${{ inputs.semgrep && needs.age.outputs.expired != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.DATUM_RUNNER_OFFLINE == 'true' && 'ubuntu-latest' || inputs.runner-label }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -744,7 +760,7 @@ jobs:
   secrets:
     needs: age
     if: ${{ inputs.gitleaks && needs.age.outputs.expired != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.DATUM_RUNNER_OFFLINE == 'true' && 'ubuntu-latest' || inputs.runner-label }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -935,7 +951,7 @@ jobs:
   dependencies:
     needs: age
     if: ${{ inputs.dependency-audit && needs.age.outputs.expired != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.DATUM_RUNNER_OFFLINE == 'true' && 'ubuntu-latest' || inputs.runner-label }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}

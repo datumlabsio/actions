@@ -117,6 +117,60 @@ and reach **nothing else** — specifically no route to the applications host, n
 
 An allowlist, not a denylist. A denylist protects against the destinations somebody thought of.
 
+## Getting a repo onto it, and off it again
+
+Two controls, and they are deliberately not the same control.
+
+**Per repo: the `runner-label` input.** A caller opts in by passing it:
+
+```yaml
+jobs:
+  ci:
+    uses: datumlabsio/actions/.github/workflows/python-ci.yml@v0.6.0
+    with:
+      runner-label: datum
+```
+
+It defaults to `ubuntu-latest`, and the default is the whole point. A label
+that no runner answers does not fail a job — GitHub queues it, silently, for
+twenty-four hours before cancelling it. So opting in has to be an act, taken
+in a repo the runner group actually grants, not something a version bump does
+to thirty repos at once.
+
+`dbt-ci` and `container-ci` do not take the input at all. Both hand a job a
+warehouse or registry credential, and a stage-1 VM on the office LAN is not
+where those go. Neither does the `violation` job in `security-baseline`, for
+the same reason — it holds the App key that files the issue.
+
+**Org-wide: the `DATUM_RUNNER_OFFLINE` variable.** While it is `"true"`, every
+opted-in job goes back to `ubuntu-latest`, whatever the input says:
+
+```yaml
+runs-on: ${{ vars.DATUM_RUNNER_OFFLINE == 'true' && 'ubuntu-latest' || inputs.runner-label }}
+```
+
+An organisation variable, not a secret: a workflow reads it with no
+credential, no extra job, and no token minted anywhere. Absent means the
+runner is up, so a repo outside the org — an external adopter, who has no such
+variable — is unaffected.
+
+`.github/workflows/runner-watch.yml` in `datumlabsio/.github` is what sets it,
+on a schedule, and puts a message in Slack when it flips. Recovery needs no
+action: the next run after the variable clears reads the new value. Two limits
+worth knowing before you rely on it:
+
+- **Detection lags.** Scheduled workflows on GitHub run late under load —
+  ten to thirty minutes is normal. During the gap, jobs queue.
+- **Queued jobs stay queued.** The variable is read when a run starts. A job
+  already waiting on a dead runner is not rescued by the flip; cancel and
+  re-run it.
+
+To flip it by hand, without waiting for the watcher:
+
+```bash
+gh variable set DATUM_RUNNER_OFFLINE --org datumlabsio --value true --visibility all
+```
+
 ## What is deliberately not here
 
 **Autoscaling.** One VM, a fixed number of runners. When jobs queue, they queue — that is visible and fine. Autoscaling is a second system to operate and nothing needs it yet.
@@ -128,7 +182,10 @@ An allowlist, not a denylist. A denylist protects against the destinations someb
 ## If it is on fire
 
 ```bash
-sudo systemctl stop actions-runner.service     # jobs queue on GitHub, nothing is lost
+sudo systemctl stop actions-runner.service                                    # on the VM
+gh variable set DATUM_RUNNER_OFFLINE --org datumlabsio --value true --visibility all
 ```
 
-Removing the runner group's repository access has the same effect and is faster from a phone.
+Stopping the service alone leaves jobs queueing until the watcher notices.
+The second command is the one that keeps merges moving, and it is the only one
+you can run from a phone.
