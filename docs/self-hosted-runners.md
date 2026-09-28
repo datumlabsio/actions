@@ -30,7 +30,10 @@ The VM: 8 GB RAM, 4–8 vCPU, 100 GB. That fits two or three concurrent lint/tes
 
 **2. Install the runner.**
 
+`curl` is a prerequisite, and a clean Ubuntu 24.04 image does not have it — `run-ephemeral.sh` needs it to exchange the App token for a registration token. Install it first, or the service fails at its first run with everything else looking correct.
+
 ```bash
+sudo apt-get update && sudo apt-get install -y curl
 sudo useradd -m -d /opt/actions-runner runner
 cd /opt/actions-runner
 curl -sSL -o runner.tar.gz \
@@ -50,7 +53,20 @@ APP_ID=<the datum-runner App's id>
 APP_PRIVATE_KEY_PATH=/etc/datum-runner.pem
 ```
 
-The key itself goes at `/etc/datum-runner.pem`, `0600`, owned by root.
+The key itself goes at `/etc/datum-runner.pem`, **`0640`, owned `root:runner`**:
+
+```bash
+sudo chown root:runner /etc/datum-runner.pem && sudo chmod 640 /etc/datum-runner.pem
+```
+
+Not `0600 root:root`, which is the obvious choice and is wrong here. `actions-runner.service` runs as `User=runner` and `app-token.py` opens that path itself, so a root-only key means the service cannot read its own credential. Root owns it, the service group reads it, nobody else can.
+
+Prove it **as the service user**. Run as root and it passes on a key the runner cannot open:
+
+```bash
+sudo -u runner env APP_ID=<id> APP_PRIVATE_KEY_PATH=/etc/datum-runner.pem \
+  RUNNER_ORG=datumlabsio python3 /opt/actions-runner/app-token.py >/dev/null && echo ok
+```
 
 **Use the App, not a personal access token.** A PAT on disk *is* the credential — read the file and use it — and it belongs to a **person**, so runners stop registering the day that person rotates or leaves. The App's key needs a signed JWT exchange first, the token it yields lasts an hour, and the App holds `organization_self_hosted_runners: write` and nothing else: it cannot read a repository, push, or see a secret.
 
@@ -75,7 +91,11 @@ Watch it for a week before widening. A runner that works for one repository is e
 
 ## Disk
 
-`reclaim-disk.sh` runs hourly and escalates: prune containers and build cache always, unused images past 75%, everything past 85%. It **fails loudly** if the disk is still above 85% after a full prune, because the alternative is jobs failing later for reasons that look unrelated.
+`reclaim-disk.sh` runs hourly and escalates: prune containers and build cache always, unused images past 75%, everything past 85%.
+
+Past 85% after a full prune it exits non-zero — **and that is quieter than it sounds.** The script emits `::error::`, which is a GitHub Actions workflow command and means nothing to systemd; here it is a literal string in the journal. The unit enters `failed`, and `systemctl --failed` is not somewhere anyone looks.
+
+So the honest description today: it records the problem where a person could find it, if they already knew to look. **Nothing notifies.** Until that is wired to the Slack path, this is the first thing to check when jobs start failing for unrelated-looking reasons.
 
 This is the most common way a self-hosted runner dies. It is a timer from day one, not a thing to add after the first outage.
 
