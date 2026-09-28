@@ -168,7 +168,7 @@ worth knowing before you rely on it:
 To flip it by hand, without waiting for the watcher:
 
 ```bash
-gh variable set DATUM_RUNNER_OFFLINE --org datumlabsio --value true --visibility all
+gh variable set DATUM_RUNNER_OFFLINE --org datumlabsio --body true --visibility all
 ```
 
 ## What is deliberately not here
@@ -183,7 +183,7 @@ gh variable set DATUM_RUNNER_OFFLINE --org datumlabsio --value true --visibility
 
 ```bash
 sudo systemctl stop actions-runner.service                                    # on the VM
-gh variable set DATUM_RUNNER_OFFLINE --org datumlabsio --value true --visibility all
+gh variable set DATUM_RUNNER_OFFLINE --org datumlabsio --body true --visibility all
 ```
 
 Stopping the service alone leaves jobs queueing until the watcher notices.
