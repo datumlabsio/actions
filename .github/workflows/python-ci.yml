@@ -133,6 +133,7 @@ jobs:
           [ "$missing" -eq 0 ] || exit 1
 
       - name: Sync dependencies
+        id: sync
         run: |
           if [ -f uv.lock ]; then
             uv sync --frozen --all-extras --dev
@@ -142,8 +143,28 @@ jobs:
             echo "::notice::No pyproject.toml; running tools without a project environment."
           fi
 
+      # ---------------------------------------------------------------------
+      # EVERY GATE BELOW RUNS EVEN WHEN THE ONE BEFORE IT FAILED
+      # ---------------------------------------------------------------------
+      #
+      # A step's `if:` carries an implicit `success()`. So a failing Type check
+      # used to SKIP Test, and a repo with any mypy debt had its tests stop
+      # running entirely — while the job stayed exactly as red as before, so
+      # nothing looked different. In polaris that hid every introspector test
+      # on every pull request that touched it.
+      #
+      # `!cancelled()` replaces the implicit success(): each gate runs and
+      # reports for itself, and the job still fails if ANY of them failed. No
+      # gate is weakened — a run that was red stays red — it just stops hiding
+      # the failures behind the first one.
+      #
+      # `steps.sync.outcome == 'success'` is the other half. If checkout, the
+      # vendored configs or the dependency sync failed, there is nothing to run
+      # a gate against, and five tools failing on a missing environment would
+      # bury the one error that matters.
       - name: Lint
-        if: inputs.lint
+        id: lint
+        if: ${{ inputs.lint && !cancelled() && steps.sync.outcome == 'success' }}
         run: |
           uv run --with-requirements "$CONFIG_DIR/tool-versions.txt" -- \
             ruff check --config "$CONFIG_DIR/ruff.toml" .
@@ -151,13 +172,15 @@ jobs:
             ruff format --check --config "$CONFIG_DIR/ruff.toml" .
 
       - name: Type check
-        if: inputs.typecheck
+        id: typecheck
+        if: ${{ inputs.typecheck && !cancelled() && steps.sync.outcome == 'success' }}
         run: |
           uv run --with-requirements "$CONFIG_DIR/tool-versions.txt" -- \
             mypy --config-file "$CONFIG_DIR/mypy.ini" .
 
       - name: Test
-        if: inputs.test
+        id: test
+        if: ${{ inputs.test && !cancelled() && steps.sync.outcome == 'success' }}
         env:
           PHASE: ${{ inputs.phase }}
           THRESHOLD: ${{ inputs.coverage-threshold }}
@@ -193,7 +216,8 @@ jobs:
           fi
 
       - name: Pre-commit hooks
-        if: inputs.pre-commit
+        id: precommit
+        if: ${{ inputs.pre-commit && !cancelled() && steps.sync.outcome == 'success' }}
         run: |
           set -euo pipefail
           # The config lives at the REPOSITORY root, never inside a component
@@ -214,7 +238,8 @@ jobs:
           uv run --with-requirements "$reqs" -- \
             pre-commit run --all-files --show-diff-on-failure
       - name: No stale or unowned quarantines (DES §11)
-        if: ${{ inputs.stale-quarantine }}
+        id: quarantine
+        if: ${{ inputs.stale-quarantine && !cancelled() && steps.sync.outcome == 'success' }}
         env:
           CONFIG_DIR_IN: ${{ inputs.config-dir || '.' }}
         run: |
@@ -248,20 +273,51 @@ jobs:
             pytest:${{ inputs.test }}
             pre-commit:${{ inputs.pre-commit }}
             no-stale-quarantine:${{ inputs.stale-quarantine }}
+          # What each step DID, not what was asked of it. The summary used to
+          # infer "ran" from the input alone, so a Test step skipped behind a
+          # failed Type check was reported as having run — the exact confusion
+          # this step exists to prevent.
+          OUTCOMES: >-
+            ruff:${{ steps.lint.outcome }}
+            mypy:${{ steps.typecheck.outcome }}
+            pytest:${{ steps.test.outcome }}
+            pre-commit:${{ steps.precommit.outcome }}
+            no-stale-quarantine:${{ steps.quarantine.outcome }}
         run: |
           set -euo pipefail
           skips="$RUNNER_TEMP/datum-skipped.txt"
           [ -f "$skips" ] || : > "$skips"
 
-          ran=""; off=""
+          outcome_of() {
+            for pair in $OUTCOMES; do
+              if [ "${pair%%:*}" = "$1" ]; then
+                echo "${pair#*:}"
+                return
+              fi
+            done
+          }
+
+          passed=""; failed=""; off=""
           for pair in $REQUESTED; do
             name="${pair%%:*}"
             on="${pair##*:}"
             if [ "$on" != "true" ]; then
               off="${off}${off:+, }${name}"
-            elif ! grep -q "^${name} " "$skips"; then
-              ran="${ran}${ran:+, }${name}"
+              continue
             fi
+            # A gate that ran and chose to skip itself (a config not vendored)
+            # says so in the skips file, and is listed from there below.
+            if grep -q "^${name} " "$skips"; then
+              continue
+            fi
+            case "$(outcome_of "$name")" in
+              success) passed="${passed}${passed:+, }${name}" ;;
+              failure) failed="${failed}${failed:+, }${name}" ;;
+              # A step held back by `!cancelled()` reports `skipped`, not
+              # `cancelled`, so the two are not told apart here. Both mean the
+              # gate never ran, which is the fact that has to be visible.
+              *) echo "${name} — did not run (setup failed, or the run was cancelled)" >> "$skips" ;;
+            esac
           done
 
           skipped=$(paste -sd';' - < "$skips" | sed 's/;/; /g')
@@ -271,7 +327,8 @@ jobs:
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| Ran | ${ran:-none} |"
+            echo "| Passed | ${passed:-none} |"
+            echo "| **Failed** | ${failed:-none} |"
             echo "| **Skipped** | ${skipped:-none} |"
             echo "| Off by config | ${off:-none} |"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -31,6 +31,32 @@ jobs:
 | `test` | boolean | `true` | `pytest`. |
 | `pre-commit` | boolean | `true` | The repo's hooks. Fails if there is no config — DES §3 requires one. |
 
+## A failing gate does not hide the next one
+
+Every gate runs once setup has succeeded, whatever the gates before it did. The
+job fails if any of them failed, so a run that was red stays red. What changes
+is that you see every failure, not only the first.
+
+Before this, a step's implicit `success()` meant one failing gate skipped every
+gate after it, with nothing on the run to say so. In polaris, pre-existing mypy
+errors meant the introspector's tests had not run on any pull request that
+touched them.
+
+If setup fails (checkout, vendored configs, installing dependencies), no gate
+runs, because there is nothing to run one against.
+
+The run summary reports what each gate **did**:
+
+| Row | Means |
+|---|---|
+| Passed | ran, and succeeded |
+| **Failed** | ran, and failed |
+| **Skipped** | never ran: it switched itself off (a config not vendored), setup failed, or the run was cancelled |
+| Off by config | not requested by the caller |
+
+It used to report a gate as "Ran" whenever the caller requested it, including a
+gate that was skipped behind an earlier failure.
+
 ## Where the configs come from
 
 **Not from here.** Your repo carries its own copy of `ruff.toml`, `mypy.ini` and `tool-versions.txt`, vendored in by its scaffold. The canonical copies live in [`configs/`](../configs/README.md), and each vendored file starts with a `# datum-config:` version stamp.

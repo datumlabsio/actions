@@ -33,6 +33,32 @@ That gives you the two checks that are on by default. Everything else you switch
 | `rfc-dir` | string | `""` | Directory of numbered proposals. Set with `spec-dir`. |
 | `spec-dir` | string | `""` | Directory of specs that proposals change. Set with `rfc-dir`. |
 
+## A failing gate does not hide the next one
+
+Every gate runs once setup has succeeded, whatever the gates before it did. The
+job fails if any of them failed, so a run that was red stays red. What changes
+is that you see every failure, not only the first.
+
+Before this, a step's implicit `success()` meant one failing gate skipped every
+gate after it, with nothing on the run to say so. In polaris, pre-existing mypy
+errors meant the introspector's tests had not run on any pull request that
+touched them.
+
+If setup fails (checkout, vendored configs, installing dependencies), no gate
+runs, because there is nothing to run one against.
+
+The run summary reports what each gate **did**:
+
+| Row | Means |
+|---|---|
+| Passed | ran, and succeeded |
+| **Failed** | ran, and failed |
+| **Skipped** | never ran: it switched itself off (a config not vendored), setup failed, or the run was cancelled |
+| Off by config | not requested by the caller |
+
+It used to report a gate as "Ran" whenever the caller requested it, including a
+gate that was skipped behind an earlier failure.
+
 ## The checks
 
 **Conflict markers.** Always on, cannot be turned off. Looks for `<<<<<<< ` and `>>>>>>> ` at the start of a line in any markdown file. A merge that left these behind should never have been merged.

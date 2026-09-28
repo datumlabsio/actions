@@ -26,6 +26,32 @@ jobs:
 | `upload-artifacts` | `true` | Upload `dist`/`.next` and the coverage report |
 | `commit-lint` | `true` | Validate the pull request title (§3) |
 
+## A failing gate does not hide the next one
+
+Every gate runs once setup has succeeded, whatever the gates before it did. The
+job fails if any of them failed, so a run that was red stays red. What changes
+is that you see every failure, not only the first.
+
+Before this, a step's implicit `success()` meant one failing gate skipped every
+gate after it, with nothing on the run to say so. In polaris, pre-existing mypy
+errors meant the introspector's tests had not run on any pull request that
+touched them.
+
+If setup fails (checkout, vendored configs, installing dependencies), no gate
+runs, because there is nothing to run one against.
+
+The run summary reports what each gate **did**:
+
+| Row | Means |
+|---|---|
+| Passed | ran, and succeeded |
+| **Failed** | ran, and failed |
+| **Skipped** | never ran: it switched itself off (a config not vendored), setup failed, or the run was cancelled |
+| Off by config | not requested by the caller |
+
+It used to report a gate as "Ran" whenever the caller requested it, including a
+gate that was skipped behind an earlier failure.
+
 ## Coverage is reported always, gated by phase
 
 DES §11 as amended by RFC-0011: a `draft` repo **MUST report** coverage but **MAY** fall below 80%; a repo serving **production MUST meet it**.
