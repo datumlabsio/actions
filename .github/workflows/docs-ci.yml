@@ -65,6 +65,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
+        id: checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
@@ -84,7 +85,26 @@ jobs:
       #
       # `.git` is excluded because a rebase in progress legitimately holds markers
       # in its own metadata.
+      # ---------------------------------------------------------------------
+      # EVERY GATE BELOW RUNS EVEN WHEN THE ONE BEFORE IT FAILED
+      # ---------------------------------------------------------------------
+      #
+      # A step's `if:` carries an implicit `success()`, so one failing gate used
+      # to SKIP every gate after it — while the job stayed exactly as red as
+      # before, so nothing looked different. In polaris that hid every
+      # introspector test on every pull request that touched them.
+      #
+      # `!cancelled()` replaces the implicit success(): each gate runs and
+      # reports for itself, and the job still fails if ANY of them failed. No
+      # gate is weakened; a red run stays red. It stops hiding the failures
+      # behind the first one.
+      #
+      # `steps.checkout.outcome == 'success'` is the other half: if setup failed
+      # there is nothing to run a gate against, and every tool failing on a
+      # missing environment would bury the one error that matters.
       - name: No conflict markers
+        id: conflict_markers
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           if grep -rn '^<<<<<<< \|^>>>>>>> ' --exclude-dir=.git . ; then
             echo "::error::Conflict markers left in a merged file."
@@ -93,7 +113,8 @@ jobs:
           echo "No conflict markers, in any file."
 
       - name: Relative links resolve
-        if: inputs.link-check
+        id: links
+        if: ${{ (inputs.link-check) && !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           python3 - <<'PY'
           import re, os, sys
@@ -125,7 +146,8 @@ jobs:
           PY
 
       - name: No placeholder rot
-        if: inputs.placeholder-paths != ''
+        id: placeholder_rot
+        if: ${{ (inputs.placeholder-paths != '') && !cancelled() && steps.checkout.outcome == 'success' }}
         env:
           PATHS: ${{ inputs.placeholder-paths }}
         run: |
@@ -173,7 +195,8 @@ jobs:
           PY
 
       - name: No retired vocabulary
-        if: inputs.vocabulary-denylist != ''
+        id: retired_vocabulary
+        if: ${{ (inputs.vocabulary-denylist != '') && !cancelled() && steps.checkout.outcome == 'success' }}
         env:
           DENYLIST: ${{ inputs.vocabulary-denylist }}
           ALLOW: ${{ inputs.vocabulary-allow-files }}
@@ -194,9 +217,8 @@ jobs:
       # a pull request that ships spec text while leaving its proposal in Draft
       # leaves the repository saying two different things.
       - name: Proposal status matches what shipped
-        if: >-
-          github.event_name == 'pull_request' &&
-          inputs.rfc-dir != '' && inputs.spec-dir != ''
+        id: proposal_status
+        if: ${{ (github.event_name == 'pull_request' && inputs.rfc-dir != '' && inputs.spec-dir != '') && !cancelled() && steps.checkout.outcome == 'success' }}
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           RFC_DIR: ${{ inputs.rfc-dir }}
@@ -268,23 +290,53 @@ jobs:
           REQUESTED: >-
             conflict-markers:true
             links:${{ inputs.link-check }}
-            placeholder-rot:true
-            retired-vocabulary:true
-            proposal-status:true
+            placeholder-rot:${{ inputs.placeholder-paths != '' }}
+            retired-vocabulary:${{ inputs.vocabulary-denylist != '' }}
+            proposal-status:${{ github.event_name == 'pull_request' && inputs.rfc-dir != '' && inputs.spec-dir != '' }}
+          # What each step DID, not what was asked of it. The summary used to
+          # infer "ran" from the input alone, so a gate skipped behind an
+          # earlier failure was reported as having run.
+          OUTCOMES: >-
+            conflict-markers:${{ steps.conflict_markers.outcome }}
+            links:${{ steps.links.outcome }}
+            placeholder-rot:${{ steps.placeholder_rot.outcome }}
+            retired-vocabulary:${{ steps.retired_vocabulary.outcome }}
+            proposal-status:${{ steps.proposal_status.outcome }}
         run: |
           set -euo pipefail
           skips="$RUNNER_TEMP/datum-skipped.txt"
           [ -f "$skips" ] || : > "$skips"
 
-          ran=""; off=""
+          outcome_of() {
+            for pair in $OUTCOMES; do
+              if [ "${pair%:*}" = "$1" ]; then
+                echo "${pair##*:}"
+                return
+              fi
+            done
+          }
+
+          passed=""; failed=""; off=""
           for pair in $REQUESTED; do
             name="${pair%:*}"
             on="${pair##*:}"
             if [ "$on" != "true" ]; then
               off="${off}${off:+, }${name}"
-            elif ! grep -q "^${name} " "$skips"; then
-              ran="${ran}${ran:+, }${name}"
+              continue
             fi
+            # A gate that ran and chose to skip itself (a config not vendored)
+            # says so in the skips file, and is listed from there below.
+            if grep -q "^${name} " "$skips"; then
+              continue
+            fi
+            case "$(outcome_of "$name")" in
+              success) passed="${passed}${passed:+, }${name}" ;;
+              failure) failed="${failed}${failed:+, }${name}" ;;
+              # A step held back by `!cancelled()` reports `skipped`, not
+              # `cancelled`, so the two are not told apart here. Both mean the
+              # gate never ran, which is the fact that has to be visible.
+              *) echo "${name} — did not run (setup failed, or the run was cancelled)" >> "$skips" ;;
+            esac
           done
 
           skipped=$(paste -sd';' - < "$skips" | sed 's/;/; /g')
@@ -294,7 +346,8 @@ jobs:
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| Ran | ${ran:-none} |"
+            echo "| Passed | ${passed:-none} |"
+            echo "| **Failed** | ${failed:-none} |"
             echo "| **Skipped** | ${skipped:-none} |"
             echo "| Off by config | ${off:-none} |"
           } >> "$GITHUB_STEP_SUMMARY"

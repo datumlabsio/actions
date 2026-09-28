@@ -147,10 +147,25 @@ jobs:
       # --frozen-lockfile is the point: CI must fail on a lockfile that does not
       # match package.json rather than quietly resolving something else.
       - name: Install dependencies
+        id: install
         run: pnpm install --frozen-lockfile --store-dir "$HOME/.pnpm-store"
 
+      # ---------------------------------------------------------------------
+      # EVERY GATE BELOW RUNS EVEN WHEN THE ONE BEFORE IT FAILED
+      # ---------------------------------------------------------------------
+      #
+      # A step's `if:` carries an implicit `success()`, so a failing Typecheck
+      # used to skip Test and Build, and the job was exactly as red either way —
+      # nothing looked different while the tests stopped running. python-ci.yml
+      # had the same shape and it hid every introspector test in polaris.
+      #
+      # `!cancelled()` replaces the implicit success(): each gate reports for
+      # itself, and the job still fails if any of them failed. Gated on the
+      # install having worked, because every tool failing on a missing
+      # node_modules would bury the one error that matters.
       - name: Lint and format check
-        if: inputs.lint
+        id: lint
+        if: ${{ inputs.lint && !cancelled() && steps.install.outcome == 'success' }}
         run: |
           set -euo pipefail
           cfg="$CONFIG_DIR/biome.json"
@@ -164,11 +179,12 @@ jobs:
           pnpm exec biome ci --config-path "$cfg" .
 
       - name: Typecheck
-        if: inputs.typecheck
+        id: typecheck
+        if: ${{ inputs.typecheck && !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm exec tsc --noEmit
 
       - name: Test with coverage
-        if: inputs.test
+        if: ${{ inputs.test && !cancelled() && steps.install.outcome == 'success' }}
         id: test
         env:
           PHASE: ${{ inputs.phase }}
@@ -209,7 +225,8 @@ jobs:
           fi
 
       - name: Build
-        if: inputs.build
+        id: build
+        if: ${{ inputs.build && !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run build
 
       - name: Upload build output and coverage
@@ -224,7 +241,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: No stale or unowned quarantines (DES §11)
-        if: ${{ inputs.stale-quarantine }}
+        id: quarantine
+        if: ${{ inputs.stale-quarantine && !cancelled() && steps.install.outcome == 'success' }}
         env:
           CONFIG_DIR_IN: ${{ inputs.config-dir || '.' }}
         run: |
@@ -258,20 +276,49 @@ jobs:
             vitest:${{ inputs.test }}
             build:${{ inputs.build }}
             no-stale-quarantine:${{ inputs.stale-quarantine }}
+          # What each step DID, not what was asked of it. Inferring "ran" from
+          # the input alone reported a skipped gate as having run.
+          OUTCOMES: >-
+            biome:${{ steps.lint.outcome }}
+            tsc:${{ steps.typecheck.outcome }}
+            vitest:${{ steps.test.outcome }}
+            build:${{ steps.build.outcome }}
+            no-stale-quarantine:${{ steps.quarantine.outcome }}
         run: |
           set -euo pipefail
           skips="$RUNNER_TEMP/datum-skipped.txt"
           [ -f "$skips" ] || : > "$skips"
 
-          ran=""; off=""
+          outcome_of() {
+            for pair in $OUTCOMES; do
+              if [ "${pair%%:*}" = "$1" ]; then
+                echo "${pair#*:}"
+                return
+              fi
+            done
+          }
+
+          passed=""; failed=""; off=""
           for pair in $REQUESTED; do
             name="${pair%%:*}"
             on="${pair##*:}"
             if [ "$on" != "true" ]; then
               off="${off}${off:+, }${name}"
-            elif ! grep -q "^${name} " "$skips"; then
-              ran="${ran}${ran:+, }${name}"
+              continue
             fi
+            # A gate that ran and chose to skip itself (a config not vendored)
+            # says so in the skips file, and is listed from there below.
+            if grep -q "^${name} " "$skips"; then
+              continue
+            fi
+            case "$(outcome_of "$name")" in
+              success) passed="${passed}${passed:+, }${name}" ;;
+              failure) failed="${failed}${failed:+, }${name}" ;;
+              # A step held back by `!cancelled()` reports `skipped`, not
+              # `cancelled`, so the two are not told apart here. Both mean the
+              # gate never ran, which is the fact that has to be visible.
+              *) echo "${name} — did not run (setup failed, or the run was cancelled)" >> "$skips" ;;
+            esac
           done
 
           skipped=$(paste -sd';' - < "$skips" | sed 's/;/; /g')
@@ -281,7 +328,8 @@ jobs:
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| Ran | ${ran:-none} |"
+            echo "| Passed | ${passed:-none} |"
+            echo "| **Failed** | ${failed:-none} |"
             echo "| **Skipped** | ${skipped:-none} |"
             echo "| Off by config | ${off:-none} |"
           } >> "$GITHUB_STEP_SUMMARY"

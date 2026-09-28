@@ -194,37 +194,61 @@ jobs:
         run: .venv/bin/dbt deps --target "$DBT_TARGET"
 
       - name: dbt parse
+        id: setup
         run: .venv/bin/dbt parse --no-partial-parse --target "$DBT_TARGET"
 
+      # ---------------------------------------------------------------------
+      # EVERY GATE BELOW RUNS EVEN WHEN THE ONE BEFORE IT FAILED
+      # ---------------------------------------------------------------------
+      #
+      # A step's `if:` carries an implicit `success()`, so one failing gate used
+      # to SKIP every gate after it — while the job stayed exactly as red as
+      # before, so nothing looked different. In polaris that hid every
+      # introspector test on every pull request that touched them.
+      #
+      # `!cancelled()` replaces the implicit success(): each gate runs and
+      # reports for itself, and the job still fails if ANY of them failed. No
+      # gate is weakened; a red run stays red. It stops hiding the failures
+      # behind the first one.
+      #
+      # `steps.setup.outcome == 'success'` is the other half: if setup failed
+      # there is nothing to run a gate against, and every tool failing on a
+      # missing environment would bury the one error that matters.
       - name: YAML coverage
-        if: inputs.yaml-coverage
+        id: yaml_coverage
+        if: ${{ (inputs.yaml-coverage) && !cancelled() && steps.setup.outcome == 'success' }}
         run: |
           .venv/bin/python "$CONFIG_DIR/dbt-yaml-coverage.py" \
             --manifest target/manifest.json \
             --mart-path "${{ inputs.mart-path }}"
 
       - name: So-what gate
-        if: inputs.so-what
+        id: so_what
+        if: ${{ (inputs.so-what) && !cancelled() && steps.setup.outcome == 'success' }}
         run: |
           .venv/bin/python "$CONFIG_DIR/check_so_what.py" \
             --manifest target/manifest.json
 
       - name: One door up
-        if: inputs.one-door
+        id: one_door
+        if: ${{ (inputs.one-door) && !cancelled() && steps.setup.outcome == 'success' }}
         run: |
           .venv/bin/python "$CONFIG_DIR/check_one_door.py" \
             --manifest target/manifest.json \
             --mart-path "${{ inputs.mart-path }}"
 
       - name: SQL lint
-        if: inputs.lint
+        id: sql_lint
+        if: ${{ (inputs.lint) && !cancelled() && steps.setup.outcome == 'success' }}
         run: .venv/bin/sqlfluff lint models/
 
       - name: dbt build
-        if: inputs.build
+        id: dbt_build
+        if: ${{ (inputs.build) && !cancelled() && steps.setup.outcome == 'success' }}
         run: .venv/bin/dbt build --target "$DBT_TARGET"
 
       - name: Keep artifacts
+        id: artifacts
         if: ${{ always() && inputs.upload-artifacts }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -252,20 +276,51 @@ jobs:
             one-door:${{ inputs.one-door }}
             dbt-build:${{ inputs.build }}
             artifacts:${{ inputs.upload-artifacts }}
+          # What each step DID, not what was asked of it. The summary used to
+          # infer "ran" from the input alone, so a gate skipped behind an
+          # earlier failure was reported as having run.
+          OUTCOMES: >-
+            sqlfluff:${{ steps.sql_lint.outcome }}
+            yaml-coverage:${{ steps.yaml_coverage.outcome }}
+            so-what:${{ steps.so_what.outcome }}
+            one-door:${{ steps.one_door.outcome }}
+            dbt-build:${{ steps.dbt_build.outcome }}
+            artifacts:${{ steps.artifacts.outcome }}
         run: |
           set -euo pipefail
           skips="$RUNNER_TEMP/datum-skipped.txt"
           [ -f "$skips" ] || : > "$skips"
 
-          ran=""; off=""
+          outcome_of() {
+            for pair in $OUTCOMES; do
+              if [ "${pair%:*}" = "$1" ]; then
+                echo "${pair##*:}"
+                return
+              fi
+            done
+          }
+
+          passed=""; failed=""; off=""
           for pair in $REQUESTED; do
             name="${pair%:*}"
             on="${pair##*:}"
             if [ "$on" != "true" ]; then
               off="${off}${off:+, }${name}"
-            elif ! grep -q "^${name} " "$skips"; then
-              ran="${ran}${ran:+, }${name}"
+              continue
             fi
+            # A gate that ran and chose to skip itself (a config not vendored)
+            # says so in the skips file, and is listed from there below.
+            if grep -q "^${name} " "$skips"; then
+              continue
+            fi
+            case "$(outcome_of "$name")" in
+              success) passed="${passed}${passed:+, }${name}" ;;
+              failure) failed="${failed}${failed:+, }${name}" ;;
+              # A step held back by `!cancelled()` reports `skipped`, not
+              # `cancelled`, so the two are not told apart here. Both mean the
+              # gate never ran, which is the fact that has to be visible.
+              *) echo "${name} — did not run (setup failed, or the run was cancelled)" >> "$skips" ;;
+            esac
           done
 
           skipped=$(paste -sd';' - < "$skips" | sed 's/;/; /g')
@@ -275,7 +330,8 @@ jobs:
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| Ran | ${ran:-none} |"
+            echo "| Passed | ${passed:-none} |"
+            echo "| **Failed** | ${failed:-none} |"
             echo "| **Skipped** | ${skipped:-none} |"
             echo "| Off by config | ${off:-none} |"
           } >> "$GITHUB_STEP_SUMMARY"
