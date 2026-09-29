@@ -141,8 +141,26 @@ jobs:
       # Installed at the pinned version rather than via a third-party action.
       # One less action to pin and bump, and the version comes from the same
       # vendored file everything else reads.
+      #
+      # INTO THE JOB'S OWN TEMP, not npm's default global prefix. The default
+      # is inside the Node install, which lives in the runner's TOOL CACHE --
+      # shared by every job on a self-hosted runner. Two consequences, and the
+      # second is the one that matters:
+      #
+      #   * a read-only tool cache fails the job outright, with
+      #     `EROFS: read-only file system` and no mention of npm's prefix;
+      #   * a WRITABLE one is worse, because it works -- one job can then leave
+      #     a binary on PATH for the next job to execute.
+      #
+      # A per-job prefix has neither problem and is identical on GitHub-hosted,
+      # where RUNNER_TEMP is wiped between jobs anyway.
       - name: Install pnpm
-        run: npm install --global "pnpm@${{ steps.versions.outputs.pnpm }}"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/npm-global"
+          npm config set prefix "$RUNNER_TEMP/npm-global"
+          echo "$RUNNER_TEMP/npm-global/bin" >> "$GITHUB_PATH"
+          npm install --global "pnpm@${{ steps.versions.outputs.pnpm }}"
 
       # The store path is passed to `pnpm install` below rather than written to
       # pnpm's global config: `pnpm config set --global` first validates that
