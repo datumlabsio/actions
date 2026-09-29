@@ -78,6 +78,9 @@ jobs:
       - name: The runner setup keeps its safety properties
         run: python3 tests/runner_setup.py
 
+      - name: The runbook does not promise egress controls that are not deployed
+        run: python3 tests/egress_claims_match_reality.py
+
       # An issue tracker cannot show coverage: a conformant repo files nothing.
       - name: The conformance report shows where we stand, not just failures
         run: python3 tests/conformance_report.py

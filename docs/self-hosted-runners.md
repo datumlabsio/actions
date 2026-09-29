@@ -204,7 +204,65 @@ This is the most common way a self-hosted runner dies. It is a timer from day on
 
 CI runs `pnpm install` and `pip install`, and those execute `postinstall` scripts and `setup.py` by design. That is arbitrary code execution on every job, inherent to CI, and no runner configuration removes it. On GitHub-hosted runners it happens on a disposable machine on somebody else's network. Here it happens on our hardware, inside our perimeter.
 
-**So the firewall is what decides whether a compromised dependency is an annoyance or an incident.** The runner's VLAN should permit outbound 443 to:
+**So the firewall is what decides whether a compromised dependency is an
+annoyance or an incident.**
+
+### What is deployed today — stage 1
+
+An nftables `output` chain on the VM itself, in its own table so `ufw` is
+untouched. It drops **new connections to any private network** and permits the
+internet:
+
+```
+table inet datum-egress {
+  set private { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+                169.254.0.0/16, 100.64.0.0/10 }
+  chain output {
+    type filter hook output priority 0; policy accept;
+    ct state established,related accept   # inbound SSH replies
+    oif "lo" accept
+    udp dport { 67, 68 } accept           # DHCP
+    ip daddr @private drop
+  }
+}
+```
+
+Three lines are load-bearing and each one is a lockout if you skip it. The
+`established,related` rule is why your own SSH survives — replies to a laptop
+on the LAN are *outbound to the LAN*, so a naive drop kills the session you are
+typing into. DHCP is why the VM keeps its address. And `169.254.0.0/16` is
+there so nothing can read a cloud metadata endpoint.
+
+Verified on the box, not inferred:
+
+```
+192.168.100.1     timeout      api.github.com      200
+192.168.100.249   timeout      pypi.org            200
+gateway ping      blocked      registry.npmjs.org  200
+```
+
+Apply it behind a timed rollback — `systemd-run --on-active=180 --unit=egress-rollback
+nft delete table inet datum-egress` — so a mistake costs three minutes rather
+than a trip to the office. And check it survives a service restart, because a
+`/etc/nftables.conf` that does not parse fails at boot **silently**: the table
+never loads, egress quietly reopens, and nothing anywhere says so.
+
+### What this is not
+
+**It is a denylist, and this document used to promise an allowlist.** It blocks
+private networks and permits the whole internet, so a malicious `postinstall`
+can still exfiltrate outward — it just cannot reach the applications host, the
+hypervisor, or any other VM. That was the blast radius worth closing first; it
+is not the whole job.
+
+**It is host-level.** It holds against an unprivileged `runner` process, which
+is the realistic threat. It does not hold against anything that gets root on
+the box, because root can flush the ruleset.
+
+### Stage 2 — still outstanding, still the real control
+
+A destination allowlist at the switch, on the runner's own VLAN, permitting
+outbound 443 to:
 
 ```
 github.com, api.github.com, codeload.github.com, *.actions.githubusercontent.com
@@ -212,9 +270,12 @@ ghcr.io, registry.npmjs.org, pypi.org, files.pythonhosted.org
 the OS package mirrors
 ```
 
-and reach **nothing else** — specifically no route to the applications host, no Tailscale, no internal DNS, no other VM on the hypervisor. No inbound ports at all: runners poll outward, so nothing needs to reach them.
+and nothing else. No inbound ports at all: runners poll outward, so nothing
+needs to reach them.
 
-An allowlist, not a denylist. A denylist protects against the destinations somebody thought of.
+An allowlist, not a denylist — a denylist protects only against the
+destinations somebody thought of. Enforced off the host, so root on the guest
+does not defeat it. This needs the network admin and is tracked in B-82.
 
 ## Getting a repo onto it, and off it again
 
