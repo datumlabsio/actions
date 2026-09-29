@@ -1,0 +1,53 @@
+#!/usr/sbin/nft -f
+#
+# Stage 1 of the egress control: the runner cannot open a connection to any
+# private network. See docs/self-hosted-runners.md.
+#
+# Its own table, so ufw is untouched -- nftables evaluates every table and a
+# drop in any chain wins. The create-then-delete pair at the top is the
+# idempotency idiom: `delete` on a table that does not exist is an error, so
+# an empty one is declared first.
+#
+# Three of these rules are a LOCKOUT if you drop them:
+#
+#   established,related   replies to a laptop on the LAN are outbound TO the
+#                         LAN, so a naive drop kills the SSH session you are
+#                         typing the change into
+#   udp 67,68             DHCP. Without it the VM loses its address at the
+#                         next lease renewal and nobody can reach it again
+#   169.254.0.0/16        the cloud metadata endpoint, which is not a LAN host
+#                         and is easy to forget
+#
+# Apply it behind a timed rollback, never bare:
+#
+#   systemd-run --on-active=180 --unit=egress-rollback \
+#     /usr/sbin/nft delete table inet datum-egress
+#   nft -f runners/datum-egress.nft
+#
+# then confirm by stopping the timer. A mistake costs three minutes instead of
+# a trip to the building.
+
+table inet datum-egress
+delete table inet datum-egress
+
+table inet datum-egress {
+  set private {
+    type ipv4_addr
+    flags interval
+    # RFC 1918, plus CGNAT and link-local. Reserved blocks, not this site's
+    # addressing -- nothing here describes our network.
+    elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+                 169.254.0.0/16, 100.64.0.0/10 }
+  }
+
+  chain output {
+    type filter hook output priority 0; policy accept;
+
+    ct state established,related accept
+    oif "lo" accept
+    udp dport { 67, 68 } accept
+
+    ip daddr @private limit rate 10/minute log prefix "datum-egress-drop " drop
+    ip daddr @private drop
+  }
+}

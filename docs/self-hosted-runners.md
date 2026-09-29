@@ -95,7 +95,7 @@ If this machine is compromised, the worst that credential does is register and r
 
 `GH_TOKEN` still works as a fallback while the App is being created, and warns every run. Temporary credentials are the ones that stay.
 
-**4. Copy in the scripts and units** from `runners/` in this repository, then:
+**4. Copy in the scripts, units and the egress ruleset** from `runners/` in this repository, then:
 
 ```bash
 sudo systemctl enable --now reclaim-disk.timer
@@ -204,7 +204,63 @@ This is the most common way a self-hosted runner dies. It is a timer from day on
 
 CI runs `pnpm install` and `pip install`, and those execute `postinstall` scripts and `setup.py` by design. That is arbitrary code execution on every job, inherent to CI, and no runner configuration removes it. On GitHub-hosted runners it happens on a disposable machine on somebody else's network. Here it happens on our hardware, inside our perimeter.
 
-**So the firewall is what decides whether a compromised dependency is an annoyance or an incident.** The runner's VLAN should permit outbound 443 to:
+**So the firewall is what decides whether a compromised dependency is an
+annoyance or an incident.**
+
+### What is deployed today — stage 1
+
+An nftables `output` chain on the VM itself, in its own table so `ufw` is
+untouched. It drops **new connections to any private network** and permits the
+internet. The ruleset is `runners/datum-egress.nft` — a file you apply, not a
+snippet to retype:
+
+```bash
+systemd-run --on-active=180 --unit=egress-rollback \
+  /usr/sbin/nft delete table inet datum-egress      # rollback net, first
+sudo nft -f runners/datum-egress.nft
+sudo systemctl stop egress-rollback.timer           # only once verified
+```
+
+Three of its rules are a lockout if you drop them, and the file says which and
+why: replies to a laptop on the LAN are *outbound to the LAN*, so without
+`established,related` you kill the SSH session you are typing into; without
+DHCP the VM loses its address; and the link-local block is the cloud metadata
+endpoint, which is not a LAN host and is easy to forget.
+
+Verified on the box, not inferred:
+
+```
+the default gateway      timeout      api.github.com      200
+another host on the LAN  timeout      pypi.org            200
+gateway ping             blocked      registry.npmjs.org  200
+```
+
+Make it survive a reboot, and **check that it does** — a `/etc/nftables.conf`
+that does not parse fails at boot silently: the table never loads, egress
+quietly reopens, and nothing anywhere says so.
+
+```bash
+echo 'include "/opt/actions-runner/datum-egress.nft"' | sudo tee -a /etc/nftables.conf
+sudo nft -c -f /etc/nftables.conf && sudo systemctl restart nftables
+sudo nft list table inet datum-egress | head -3   # still there = survives boot
+```
+
+### What this is not
+
+**It is a denylist, and this document used to promise an allowlist.** It blocks
+private networks and permits the whole internet, so a malicious `postinstall`
+can still exfiltrate outward — it just cannot reach the applications host, the
+hypervisor, or any other VM. That was the blast radius worth closing first; it
+is not the whole job.
+
+**It is host-level.** It holds against an unprivileged `runner` process, which
+is the realistic threat. It does not hold against anything that gets root on
+the box, because root can flush the ruleset.
+
+### Stage 2 — still outstanding, still the real control
+
+A destination allowlist at the switch, on the runner's own VLAN, permitting
+outbound 443 to:
 
 ```
 github.com, api.github.com, codeload.github.com, *.actions.githubusercontent.com
@@ -212,9 +268,12 @@ ghcr.io, registry.npmjs.org, pypi.org, files.pythonhosted.org
 the OS package mirrors
 ```
 
-and reach **nothing else** — specifically no route to the applications host, no Tailscale, no internal DNS, no other VM on the hypervisor. No inbound ports at all: runners poll outward, so nothing needs to reach them.
+and nothing else. No inbound ports at all: runners poll outward, so nothing
+needs to reach them.
 
-An allowlist, not a denylist. A denylist protects against the destinations somebody thought of.
+An allowlist, not a denylist — a denylist protects only against the
+destinations somebody thought of. Enforced off the host, so root on the guest
+does not defeat it. This needs the network admin and is tracked in B-82.
 
 ## Getting a repo onto it, and off it again
 
