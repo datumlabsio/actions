@@ -95,7 +95,7 @@ If this machine is compromised, the worst that credential does is register and r
 
 `GH_TOKEN` still works as a fallback while the App is being created, and warns every run. Temporary credentials are the ones that stay.
 
-**4. Copy in the scripts and units** from `runners/` in this repository, then:
+**4. Copy in the scripts, units and the egress ruleset** from `runners/` in this repository, then:
 
 ```bash
 sudo systemctl enable --now reclaim-disk.timer
@@ -211,41 +211,39 @@ annoyance or an incident.**
 
 An nftables `output` chain on the VM itself, in its own table so `ufw` is
 untouched. It drops **new connections to any private network** and permits the
-internet:
+internet. The ruleset is `runners/datum-egress.nft` — a file you apply, not a
+snippet to retype:
 
-```
-table inet datum-egress {
-  set private { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
-                169.254.0.0/16, 100.64.0.0/10 }
-  chain output {
-    type filter hook output priority 0; policy accept;
-    ct state established,related accept   # inbound SSH replies
-    oif "lo" accept
-    udp dport { 67, 68 } accept           # DHCP
-    ip daddr @private drop
-  }
-}
+```bash
+systemd-run --on-active=180 --unit=egress-rollback \
+  /usr/sbin/nft delete table inet datum-egress      # rollback net, first
+sudo nft -f runners/datum-egress.nft
+sudo systemctl stop egress-rollback.timer           # only once verified
 ```
 
-Three lines are load-bearing and each one is a lockout if you skip it. The
-`established,related` rule is why your own SSH survives — replies to a laptop
-on the LAN are *outbound to the LAN*, so a naive drop kills the session you are
-typing into. DHCP is why the VM keeps its address. And `169.254.0.0/16` is
-there so nothing can read a cloud metadata endpoint.
+Three of its rules are a lockout if you drop them, and the file says which and
+why: replies to a laptop on the LAN are *outbound to the LAN*, so without
+`established,related` you kill the SSH session you are typing into; without
+DHCP the VM loses its address; and the link-local block is the cloud metadata
+endpoint, which is not a LAN host and is easy to forget.
 
 Verified on the box, not inferred:
 
 ```
-192.168.100.1     timeout      api.github.com      200
-192.168.100.249   timeout      pypi.org            200
-gateway ping      blocked      registry.npmjs.org  200
+the default gateway      timeout      api.github.com      200
+another host on the LAN  timeout      pypi.org            200
+gateway ping             blocked      registry.npmjs.org  200
 ```
 
-Apply it behind a timed rollback — `systemd-run --on-active=180 --unit=egress-rollback
-nft delete table inet datum-egress` — so a mistake costs three minutes rather
-than a trip to the office. And check it survives a service restart, because a
-`/etc/nftables.conf` that does not parse fails at boot **silently**: the table
-never loads, egress quietly reopens, and nothing anywhere says so.
+Make it survive a reboot, and **check that it does** — a `/etc/nftables.conf`
+that does not parse fails at boot silently: the table never loads, egress
+quietly reopens, and nothing anywhere says so.
+
+```bash
+echo 'include "/opt/actions-runner/datum-egress.nft"' | sudo tee -a /etc/nftables.conf
+sudo nft -c -f /etc/nftables.conf && sudo systemctl restart nftables
+sudo nft list table inet datum-egress | head -3   # still there = survives boot
+```
 
 ### What this is not
 

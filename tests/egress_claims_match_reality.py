@@ -21,8 +21,20 @@ import pathlib
 import re
 import sys
 
-DOC = (pathlib.Path(__file__).resolve().parents[1]
-       / "docs" / "self-hosted-runners.md").read_text()
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+DOC = (ROOT / "docs" / "self-hosted-runners.md").read_text()
+# The ruleset lives in runners/ rather than in the document, because a public
+# repository must not carry this site's addressing -- the no_literal_env_values
+# gate caught exactly that here, in prose, which is the half it exists for.
+_NFT_RAW = (ROOT / "runners" / "datum-egress.nft").read_text()
+
+# Strip the comments before asserting. That file explains every lockout rule in
+# a comment directly above it, so deleting the RULE leaves the WORDS, and a
+# substring check passes on the explanation. runner_setup.py has carried a
+# code_only() for this since --ephemeral escaped the same way; two mutations
+# escaped here before this line existed.
+NFT = "\n".join(l for l in _NFT_RAW.splitlines()
+                 if not l.lstrip().startswith("#"))
 
 failures = []
 
@@ -34,13 +46,13 @@ def check(cond, msg):
 
 egress = DOC.split("## Network egress")[1].split("\n## ")[0]
 
-# Assert on the RULESET, not on the paragraph that explains it. Deleting a rule
-# leaves its explanation behind, and a substring check then passes on the prose
-# — the same trap runner_setup.py's code_only() exists for. Four of these
-# escaped a first pass for exactly that reason.
-blocks = re.findall(r"```\n(.*?)```", egress, re.S)
-ruleset = next((b for b in blocks if "chain output" in b), "")
-evidence = next((b for b in blocks if "timeout" in b or "200" in b), "")
+# Assert on the RULESET FILE, not on the paragraph that explains it. Deleting a
+# rule leaves its explanation behind, and a substring check then passes on the
+# prose -- the same trap runner_setup.py's code_only() exists for. Four of
+# these escaped a first pass for exactly that reason.
+blocks = re.findall(r"```(?:bash)?\n(.*?)```", egress, re.S)
+ruleset = NFT
+evidence = next((b for b in blocks if "timeout" in b and "200" in b), "")
 not_this = egress.split("### What this is not")[-1].split("### Stage 2")[0]
 
 # --- the deployed thing is described as what it is -------------------------
@@ -55,7 +67,13 @@ check(re.search(r"root on\s+the\s+(box|guest)", not_this) is not None,
       "root — the stage-2 paragraph saying it is not the same claim")
 
 # --- the three rules that are a lockout if dropped -------------------------
-check(ruleset != "", "the nftables ruleset is gone from the runbook entirely")
+check("chain output" in ruleset,
+      "runners/datum-egress.nft no longer defines an output chain")
+check("@private drop" in ruleset,
+      "the ruleset no longer drops anything -- it accepts and logs, which "
+      "reads as a control and is not one")
+check(DOC.count("datum-egress.nft") >= 2,
+      "the runbook no longer points at the ruleset, so the two will drift")
 for rule, why in [
     ("established,related",
      "without it, dropping LAN egress kills the SSH session applying the rule"),
