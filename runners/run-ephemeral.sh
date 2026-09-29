@@ -44,6 +44,12 @@ fi
 
 cd "$RUNNER_DIR"
 
+# A runner killed mid-job -- OOM, power cut, `systemctl stop` -- leaves .runner
+# behind, and config.sh then refuses with "Cannot configure the runner because
+# it is already configured". Forever, every RestartSec. --replace handles the
+# registration on GitHub's side; nothing handles the local side, so this does.
+rm -f .runner .credentials .credentials_rsaparams
+
 # A registration token is single-use and expires in an hour, which is why this
 # is fetched per job rather than stored anywhere. The token authorising THIS
 # call is itself an hour-long installation token, minted a moment ago.
@@ -56,6 +62,11 @@ TOKEN=$(curl -sS --fail -X POST \
 # --ephemeral is not optional. Without it this loop reuses one registration and
 # the isolation above disappears silently -- the runner keeps working, which is
 # what makes it easy to miss.
+#
+# The name is STABLE PER INSTANCE, not per process. Because the rm above throws
+# away .credentials, the runner can no longer deregister itself on exit, so a
+# PID-based name orphans a registration on every single job -- 39 dead entries
+# in one afternoon, here. A stable name means --replace reuses the same slot.
 ./config.sh \
   --unattended \
   --ephemeral \
@@ -64,7 +75,7 @@ TOKEN=$(curl -sS --fail -X POST \
   --token "$TOKEN" \
   --runnergroup "$RUNNER_GROUP" \
   --labels "$RUNNER_LABELS" \
-  --name "$(hostname)-$$" \
+  --name "$(hostname)-${RUNNER_DIR##*-}" \
   --work _work
 
 # Exits after one job. systemd restarts us; the next loop registers afresh.
