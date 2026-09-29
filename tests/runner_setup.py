@@ -46,6 +46,8 @@ def code_only(text: str) -> str:
 
 run = code_only((R / "run-ephemeral.sh").read_text())
 unit = code_only((R / "actions-runner.service").read_text())
+tmpl_raw = (R / "actions-runner@.service").read_text()
+tmpl = code_only(tmpl_raw)
 disk = code_only((R / "reclaim-disk.sh").read_text())
 timer = (R / "reclaim-disk.timer").read_text()
 doc = DOC.read_text()
@@ -113,7 +115,57 @@ check("errors never echo the JWT or the key path",
 check("the service does not run as root",
       "User=runner" in unit and "User=root" not in unit)
 
+
+# --- ten runners, and the four ways that went wrong ------------------------
+#
+# Every one of these was found by watching ten instances crash-loop against
+# GitHub, not by reading the unit. They share a shape: the runner keeps
+# restarting, systemd reports `active`, and nothing registers.
+check("the template exists at all", tmpl_raw != "",
+      "one runner is a queue of one -- 14 jobs took 28 minutes")
+check("each instance gets its own directory",
+      "/opt/actions-runner-%i" in tmpl,
+      "config.sh writes one registration and _work per directory")
+check("RUNNER_DIR is set through /usr/bin/env, not Environment=",
+      "/usr/bin/env" in tmpl and "Environment=RUNNER_DIR" not in tmpl,
+      "EnvironmentFile wins over Environment=, so the systemd way silently "
+      "loses to /etc/actions-runner.env and every instance crash-loops")
+check("HOME is per instance",
+      "HOME=/opt/actions-runner-%i" in tmpl,
+      "a shared ~/.cache/uv gives 'Could not acquire lock' on every Python job")
+check("PATH carries pipx's bin directory",
+      "/opt/actions-runner-%i/.local/bin" in tmpl,
+      "else `pipx install semgrep` succeeds and `semgrep` is not found")
+check("pip is allowed to install on a PEP 668 system",
+      "PIP_BREAK_SYSTEM_PACKAGES=1" in tmpl,
+      "gitops-ci does a bare `pip install pyyaml`; Ubuntu 24.04 refuses it")
+check("a persistent failure stops instead of hammering GitHub",
+      "StartLimitBurst" in tmpl,
+      "ten instances retrying every 5s is a self-inflicted denial of service")
+check("the template keeps the hardening the single unit had",
+      all(x in tmpl for x in ("User=runner", "ProtectSystem=strict",
+                              "NoNewPrivileges=true")),
+      "a template is a rewrite, and a rewrite is where hardening is dropped")
+
+# --- the ephemeral loop survives an unclean kill ---------------------------
+check("stale local registration is cleared before configuring",
+      "rm -f .runner" in run,
+      "a runner killed mid-job leaves .runner, and config.sh then refuses "
+      "with 'already configured' forever")
+check("the runner name is stable per instance, not per process",
+      "$$" not in run.split("--name")[1].split("\\")[0],
+      "clearing .credentials means it cannot deregister itself, so a PID-based "
+      "name orphans a registration every job -- 39 in one afternoon")
+
+# --- the runbook records what the numbers actually were --------------------
+check("the runbook says bandwidth is the constraint, not CPU",
+      "do not buy more cores" in doc.lower(),
+      "the next person will resize the VM again otherwise")
+check("the runbook lists the packages the workflows assume",
+      all(x in doc for x in ("libpq-dev", "pipx", "python3-dev")),
+      "each absence fails somewhere other than the install")
+
 if FAILURES:
     print(f"\nFAIL: {len(FAILURES)}: {', '.join(FAILURES)}")
     sys.exit(1)
-print(f"\nOK: the three silent-failure properties are asserted")
+print(f"\nOK: the silent-failure properties are asserted")

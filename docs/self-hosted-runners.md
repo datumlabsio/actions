@@ -24,16 +24,37 @@ Container jobs stay on GitHub-hosted until there is a runner with disk sized for
 
 ## Standing one up
 
-The VM: 8 GB RAM, 4–8 vCPU, 100 GB. That fits two or three concurrent lint/test jobs at parity with GitHub's runner (2 vCPU / 7 GB each).
+The VM: 16 vCPU, 32 GB, 100 GB. Ten concurrent lint/test jobs peaked at load 9
+of 16 and **6.5 GB of 32** — so this is generous on both, deliberately, because
+the first guess (8 vCPU, 17 GB) hit load 16.1 with the same workload and every
+job slowed three- to four-fold.
+
+**Do not size this against CPU.** Bandwidth is the binding constraint and the
+numbers are at the bottom of this file. More cores past this point buy nothing.
 
 **1. A runner group scoped to private repositories.** In organisation settings → Actions → Runner groups. Create `datum-private`, set repository access to **selected repositories**, and add only private ones. This is the control that enforces rule one — not a convention, a setting.
 
 **2. Install the runner.**
 
-`curl` is a prerequisite, and a clean Ubuntu 24.04 image does not have it — `run-ephemeral.sh` needs it to exchange the App token for a registration token. Install it first, or the service fails at its first run with everything else looking correct.
+A clean Ubuntu 24.04 image has almost none of what these workflows assume. They
+were written against GitHub's runner image, which preinstalls a very large
+amount, and **every absence fails somewhere other than the install**:
+
+| missing | how it actually presents |
+|---|---|
+| `curl` | the service fails on its first run, everything else looking correct |
+| `git` | `actions/checkout` silently falls back to a tarball download and goes **green** — then `gitleaks` finds no history, scans the whole working tree, and fails three steps later naming none of this |
+| `pipx` | `pipx: command not found`, exit 127, in whichever gate installs a tool |
+| `libpq-dev`, `python3-dev` | `Failed to build psycopg2-…` inside a dependency resolve |
+
+`git` is the one worth reading twice. A missing binary produced a passing
+checkout and a failure elsewhere — the same shape as the `curl` problem that
+cost three weeks, and the reason step 6 below exists.
 
 ```bash
-sudo apt-get update && sudo apt-get install -y curl
+sudo apt-get update && sudo apt-get install -y \
+  curl git pipx python3-pip python3-venv build-essential \
+  libpq-dev python3-dev pkg-config
 sudo useradd -m -d /opt/actions-runner runner
 cd /opt/actions-runner
 curl -sSL -o runner.tar.gz \
@@ -77,14 +98,92 @@ If this machine is compromised, the worst that credential does is register and r
 **4. Copy in the scripts and units** from `runners/` in this repository, then:
 
 ```bash
-sudo systemctl enable --now actions-runner.service
 sudo systemctl enable --now reclaim-disk.timer
 ```
 
-**5. Point one workflow at it.** Start with `polaris` lint and test only:
+**5. Ten runners, not one.** One runner is a queue of one: fourteen jobs that
+want five minutes of wall clock took **twenty-eight**, almost all of it
+waiting. Each instance needs its **own directory** — `config.sh` writes a
+single registration and `_work` into it, so they cannot share one.
+
+```bash
+sudo bash -s <<'SETUP'
+set -euo pipefail
+N=10; SRC=/opt/actions-runner
+for i in $(seq 1 $N); do
+  D=/opt/actions-runner-$i
+  [ -d "$D" ] || { mkdir -p "$D"
+    tar -C "$SRC" --exclude=_work --exclude=_diag --exclude=.runner \
+        --exclude=.credentials --exclude=.credentials_rsaparams -cf - . | tar -C "$D" -xf -
+    mkdir -p "$D/_work"; }
+  chown -R runner:runner "$D"
+done
+mkdir -p /opt/hostedtoolcache && chown runner:runner /opt/hostedtoolcache
+systemctl daemon-reload
+systemctl enable --now $(seq -f 'actions-runner@%g' 1 $N)
+SETUP
+```
+
+The template unit is `runners/actions-runner@.service`. Four things in its
+`ExecStart` are not optional, and each was found the hard way:
+
+```
+ExecStart=/usr/bin/env HOME=/opt/actions-runner-%i RUNNER_DIR=/opt/actions-runner-%i \
+  RUNNER_TOOL_CACHE=/opt/hostedtoolcache PIP_BREAK_SYSTEM_PACKAGES=1 \
+  PATH=/opt/actions-runner-%i/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  /opt/actions-runner-%i/run-ephemeral.sh
+```
+
+- **`/usr/bin/env`, not `Environment=`.** `EnvironmentFile=` wins over
+  `Environment=` regardless of the order they appear in the unit. Setting
+  `RUNNER_DIR` the systemd way silently loses to `/etc/actions-runner.env`,
+  every instance then configures in the *original* directory, which
+  `ReadWritePaths` correctly makes read-only, and all ten crash-loop every five
+  seconds.
+- **`HOME` per instance.** The `runner` user's home is `/opt/actions-runner`.
+  Leave it and ten instances share one `~/.cache/uv` and one `~/.local`: you get
+  `error: Could not acquire lock` on every Python job and
+  `Read-only file system: .../.local/state/pipx` on every pipx one.
+- **`PATH` including `$HOME/.local/bin`.** pipx installs there. Without it,
+  `pipx install semgrep` succeeds and then `semgrep: command not found`.
+- **`PIP_BREAK_SYSTEM_PACKAGES=1`.** Ubuntu 24.04 is PEP 668 managed, so a bare
+  `python3 -m pip install` — which `gitops-ci` does for PyYAML — fails with
+  `externally-managed-environment`. GitHub's image permits it; this restores
+  parity.
+
+Also set `StartLimitIntervalSec=300` / `StartLimitBurst=20` in `[Unit]`, so a
+persistent failure stops instead of hammering GitHub's registration endpoint
+every five seconds. Ours did that unnoticed for ninety seconds, twice.
+
+**Two traps in the ephemeral loop itself**, both invisible until a runner is
+killed mid-job:
+
+- A runner that does not exit cleanly leaves `.runner` behind, and `config.sh`
+  then refuses with *"Cannot configure the runner because it is already
+  configured"* — **forever**. `--replace` handles the server side; nothing
+  handles the local side. `run-ephemeral.sh` deletes `.runner` and
+  `.credentials*` before configuring.
+- Because it deletes `.credentials`, the runner can no longer deregister
+  itself, so a **PID-based name orphans a registration every job**. Ours reached
+  39 dead entries in an afternoon. Name each instance stably —
+  `$(hostname)-${RUNNER_DIR##*-}` — and `--replace` reuses the same slot.
+
+**6. Prove the toolchain is there before trusting a green run.**
+
+```bash
+for b in git curl pipx python3 pip3 gcc make; do
+  command -v $b >/dev/null || echo "MISSING: $b"
+done
+```
+
+**7. Point one workflow at it.** Start with `polaris` lint and test only:
 
 ```yaml
-runs-on: [self-hosted, linux, datum]
+jobs:
+  ci:
+    uses: datumlabsio/actions/.github/workflows/python-ci.yml@v1.10.0
+    with:
+      runner-label: datum
 ```
 
 Watch it for a week before widening. A runner that works for one repository is evidence; a migration is not.
@@ -173,11 +272,54 @@ gh variable set DATUM_RUNNER_OFFLINE --org datumlabsio --body true --visibility 
 
 ## What is deliberately not here
 
-**Autoscaling.** One VM, a fixed number of runners. When jobs queue, they queue — that is visible and fine. Autoscaling is a second system to operate and nothing needs it yet.
+**Autoscaling.** One VM, ten runners. Autoscaling is a second system to operate and nothing needs it yet — and with bandwidth as the constraint, more runners would make things worse, not better.
 
 **Caching between jobs.** Ephemeral runners start cold every time. That is the cost of rule two and it is not negotiable for a speed gain.
 
+The shared tool cache at `/opt/hostedtoolcache` is not an exception to that, as
+long as it is **root-owned and read-only to jobs**. A writable shared cache
+would let one job plant a binary the next job executes, which is precisely what
+rule two exists to prevent. Populate it under a commit you control, then lock
+it.
+
 **Container builds.** See above.
+
+## Why it takes sixteen minutes, and what would fix it
+
+Measured on `polaris`, fourteen jobs, ten runners, 16 vCPU / 32 GB:
+
+| | |
+|---|---|
+| wall clock | **16 minutes** |
+| queue time per job | 2–32 s — parallelism is not the problem |
+| peak load | 9.15 of 16 — **CPU is not the problem** |
+| peak memory | 6.5 GB of 32 — memory is not the problem |
+
+The same jobs run alone on this box take 98–311 s. Run ten at a time they take
+478–948 s, while the CPU sits half idle. What they are waiting on is the office
+uplink:
+
+```
+1 stream    2.27 MB/s
+6 streams   3.59 MB/s aggregate
+```
+
+**About 29 Mbit/s total, and parallelism buys almost nothing** — six streams got
+1.6× one stream. Ten jobs each resolving dependencies share that, so a project
+pulling 300 MB of wheels takes a quarter of an hour. GitHub-hosted runners sit
+in the same datacentre as PyPI and npm with gigabit to both. That is a 30× gap
+and no amount of VM tuning closes it.
+
+So: **do not buy more cores, and do not add more runners.** The only thing that
+moves this number is not fetching the same public bytes over the WAN ten times
+— a read-through package cache on the LAN (devpi for PyPI, Verdaccio for npm),
+or a faster uplink. A package proxy caches public immutable artefacts, not job
+state, so it does not cost rule two.
+
+Worth stating plainly, because it changes the decision: moving `polaris`
+off GitHub-hosted saves about **$8 a month**. At sixteen minutes versus six,
+the case for self-hosting is the Actions budget cap and where the code runs —
+not speed, and not really cost either.
 
 ## If it is on fire
 

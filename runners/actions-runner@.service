@@ -1,0 +1,57 @@
+# One job, then exit. systemd restarts us and run-ephemeral.sh registers afresh.
+#
+# A TEMPLATE, because one runner is a queue of one: fourteen jobs that should
+# take five minutes of wall clock took twenty-eight, almost all of it waiting.
+# Enable ten of these (`actions-runner@1` .. `@10`); each needs its own
+# directory, because config.sh writes a single registration and _work into it.
+#
+# Restart=always is what makes the ephemeral loop work: the runner is SUPPOSED
+# to exit after every job, so an exit is success, not a fault. StartLimitBurst
+# is what stops a REAL failure from becoming a hammer -- ten instances retrying
+# every five seconds against GitHub's registration endpoint is a denial of
+# service aimed at ourselves, and it ran unnoticed for ninety seconds twice
+# before this line existed.
+[Unit]
+Description=GitHub Actions ephemeral runner %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=runner
+Group=runner
+WorkingDirectory=/opt/actions-runner-%i
+EnvironmentFile=/etc/actions-runner.env
+
+# /usr/bin/env, NOT Environment=. EnvironmentFile wins over Environment=
+# whatever order they appear in, so setting RUNNER_DIR the systemd way loses to
+# /etc/actions-runner.env, every instance configures in the ORIGINAL directory,
+# ReadWritePaths correctly makes that read-only, and all ten crash-loop.
+#
+#   HOME        per instance, or ten runners share one ~/.cache/uv and every
+#               Python job dies on "error: Could not acquire lock"
+#   PATH        pipx installs into $HOME/.local/bin; without it you get
+#               `pipx install semgrep` followed by `semgrep: command not found`
+#   PIP_BREAK…  Ubuntu 24.04 is PEP 668 managed, so a bare `pip install` fails
+#               with externally-managed-environment. GitHub's image allows it.
+ExecStart=/usr/bin/env HOME=/opt/actions-runner-%i RUNNER_DIR=/opt/actions-runner-%i RUNNER_TOOL_CACHE=/opt/hostedtoolcache AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache PIP_BREAK_SYSTEM_PACKAGES=1 PATH=/opt/actions-runner-%i/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/actions-runner-%i/run-ephemeral.sh
+Restart=always
+RestartSec=5
+
+# The runner executes dependency installs from npm and PyPI. It should not be
+# able to reach anything on this box that it does not need. The tool cache is
+# listed here only while it is being populated; lock it root-owned and
+# read-only afterwards, or one job can plant a binary the next job runs.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/actions-runner-%i /opt/hostedtoolcache
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
