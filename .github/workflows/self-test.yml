@@ -601,8 +601,28 @@ jobs:
             | tar xz -C "$RUNNER_TEMP/bin" gitleaks
           "$RUNNER_TEMP/bin/gitleaks" version
 
-          printf 'aws_secret_access_key = "%s"\n' \
-            "$(head -c 30 /dev/urandom | base64 | tr -d '/+=' | head -c 40)" \
+          # gitleaks' aws-secret-key rule needs EXACTLY 40 characters of
+          # [A-Za-z0-9/+]. The old generator took 30 random bytes (40 base64
+          # characters), then deleted every / and + from them -- so it usually
+          # produced 38 or 39, the rule did not match, and this step failed
+          # claiming gitleaks had accepted a credential. About a quarter of
+          # runs. Nobody chased it because a re-run went green.
+          #
+          # Over-generate, strip, THEN take 40. base64 wraps at 76 columns, so
+          # the newlines have to go too or they are counted.
+          secret=$(head -c 120 /dev/urandom | base64 | tr -d '/+=\n' | head -c 40)
+
+          # And check the fixture before trusting the result. A test whose
+          # input is wrong does not fail honestly -- it blames the thing it is
+          # testing, which is exactly what this one did.
+          if [ "${#secret}" -ne 40 ]; then
+            echo "::error::planted secret is ${#secret} characters, not 40."
+            echo "::error::gitleaks' AWS rule would not match it, so a pass"
+            echo "::error::here would mean nothing. Fix the generator."
+            exit 1
+          fi
+
+          printf 'aws_secret_access_key = "%s"\n' "$secret" \
             > "$RUNNER_TEMP/leak/config.txt"
 
           if "$RUNNER_TEMP/bin/gitleaks" dir "$RUNNER_TEMP/leak" \
