@@ -15,6 +15,14 @@ name: web-app
 on:
   workflow_call:
     inputs:
+      runner-label:
+        description: >-
+          Runner to schedule on. See the note on the same input in python-ci;
+          the default keeps every job on GitHub-hosted runners, and the org
+          variable DATUM_RUNNER_OFFLINE overrides it.
+        type: string
+        default: "ubuntu-latest"
+
       working-directory:
         type: string
         default: "."
@@ -60,11 +68,13 @@ jobs:
     # no log. The toggle and the event check both live inside commit-lint.yml.
     uses: ./.github/workflows/commit-lint.yml
     with:
+      runner-label: ${{ inputs.runner-label }}
       enabled: ${{ inputs.commit-lint }}
 
   web:
     uses: ./.github/workflows/web-ci.yml
     with:
+      runner-label: ${{ inputs.runner-label }}
       working-directory: ${{ inputs.working-directory }}
       config-dir: ${{ inputs.config-dir }}
       lint: ${{ inputs.lint }}
