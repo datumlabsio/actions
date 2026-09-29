@@ -2,8 +2,15 @@
 """The runbook must not promise a control that is not deployed.
 
 For months this document described the runner's egress as an allowlist at the
-switch — "reach nothing else" — while nothing at all was filtering. Anyone
-reading it would have concluded the blast radius was bounded. It was not.
+switch — "reach nothing else" — when what existed was a denylist on the guest.
+Anyone reading it would have concluded the blast radius was bounded by the
+network. It is bounded by a ruleset that root on the guest can flush.
+
+(The first version of this file said nothing was filtering at all. That was
+not verified and was probably wrong — B-82 records host rules applied and
+matching the day before. Asserting an absence without looking is the same
+mistake this file exists to catch, so it is corrected rather than quietly
+reworded.)
 
 What is deployed is weaker and worth being exact about: an nftables output
 chain on the guest that blocks private networks and permits the internet. It
