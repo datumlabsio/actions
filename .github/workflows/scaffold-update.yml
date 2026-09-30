@@ -176,9 +176,13 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
+      # Into the job's own temp, not the shared read-only tool cache. Why:
+      # python-ci.yml, on its own Install uv step.
       - name: Install uv
         if: steps.latest.outputs.changed == 'true'
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        env:
+          RUNNER_TOOL_CACHE: ${{ runner.temp }}/tool-cache
 
       - name: Run copier update
         id: render

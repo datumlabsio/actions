@@ -84,6 +84,9 @@ jobs:
       - name: A global install cannot leave a binary for the next job
         run: python3 tests/global_installs_are_per_job.py
 
+      - name: A downloaded tool lands in the job's temp, not the shared cache
+        run: python3 tests/tool_downloads_are_per_job.py
+
       # An issue tracker cannot show coverage: a conformant repo files nothing.
       - name: The conformance report shows where we stand, not just failures
         run: python3 tests/conformance_report.py
