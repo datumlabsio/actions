@@ -119,8 +119,17 @@ jobs:
       - name: Check out
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      # INTO THE JOB'S OWN TEMP, not the runner's TOOL CACHE. With no version
+      # pinned, setup-uv fetches the latest uv and stores it in the tool cache
+      # -- which on a self-hosted runner is shared, root-owned and read-only by
+      # design (docs/self-hosted-runners.md). That works only while the latest
+      # uv happens to be the one already cached: uv 0.12.21 came out and every
+      # job failed at `mkdir '/opt/hostedtoolcache/uv/0.12.21'`. A per-job
+      # cache has no such day, and is what GitHub-hosted runners do anyway.
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        env:
+          RUNNER_TOOL_CACHE: ${{ runner.temp }}/tool-cache
         with:
           enable-cache: true
 
