@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A tool a job downloads must land in that job's own temp.
 
-`astral-sh/setup-uv` stores the uv it downloads in the runner's TOOL CACHE. On
+Every `setup-*` action stores what it downloads in the runner's TOOL CACHE. On
 a self-hosted runner that cache is shared by every job on the box, and it is
 root-owned and read-only on purpose (docs/self-hosted-runners.md). So the step
 works only while the uv it wants is one already cached — and with no version
@@ -23,7 +23,13 @@ import sys
 
 WF = pathlib.Path(__file__).resolve().parents[1] / ".github" / "workflows"
 
-SETUP_UV = re.compile(r"uses:\s*astral-sh/setup-uv@")
+# ANY setup-* action, not just setup-uv. They all use the tool cache, so they
+# all have this fault; setup-uv merely found it first, because it pins no
+# version and therefore wanted a uv the cache had never seen. setup-node is
+# pinned, so it waits for someone to bump tool-versions.txt -- a longer fuse
+# on the same bomb, and a worse one to debug because the change that lights it
+# has nothing to do with runners.
+SETUP_ANY = re.compile(r"uses:\s*[\w.-]+/setup-[\w.-]+@")
 # The variable itself has to point at the job's temp, in this step's env. A
 # RUNNER_TEMP mentioned anywhere else in the step would not move the download.
 PER_JOB = re.compile(
@@ -33,7 +39,7 @@ failures = []
 
 for path in sorted(WF.glob("*.yml")):
     text = path.read_text()
-    for m in SETUP_UV.finditer(text):
+    for m in SETUP_ANY.finditer(text):
         line_no = text[:m.start()].count("\n") + 1
         # The step: from its `- name:` back to the previous step, forward to
         # the next step at the same indent.
@@ -46,7 +52,8 @@ for path in sorted(WF.glob("*.yml")):
 
         if not PER_JOB.search(step):
             failures.append(
-                f"{path.name}:{line_no} runs setup-uv without pointing "
+                f"{path.name}:{line_no} runs {m.group(0).split('uses:')[1].strip()} "
+                f"without pointing "
                 f"RUNNER_TOOL_CACHE at the job's temp — on a self-hosted "
                 f"runner it will try to write the shared, read-only tool cache")
 
@@ -56,4 +63,4 @@ if failures:
     print("  env:")
     print("    RUNNER_TOOL_CACHE: ${{ runner.temp }}/tool-cache")
     sys.exit(1)
-print("PASS  every setup-uv step downloads into the job's own temp")
+print("PASS  every setup-* step downloads into the job's own temp")

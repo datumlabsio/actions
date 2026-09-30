@@ -133,8 +133,17 @@ jobs:
             echo "  ${key} = ${v}"
           done
 
+      # Same reason as the uv steps: setup-node stores what it downloads in
+      # the runner's TOOL CACHE, which on a self-hosted runner is shared,
+      # root-owned and read-only on purpose. Unlike uv this one is version
+      # PINNED, so it does not break on its own -- it breaks the day somebody
+      # bumps node in tool-versions.txt, on a pull request that has nothing to
+      # do with runners, and they get `ENOENT ... mkdir /opt/hostedtoolcache/
+      # node/<new version>` with no clue why.
       - name: Install Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        env:
+          RUNNER_TOOL_CACHE: ${{ runner.temp }}/tool-cache
         with:
           node-version: ${{ steps.versions.outputs.node }}
 
