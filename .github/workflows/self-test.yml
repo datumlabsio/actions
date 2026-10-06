@@ -90,6 +90,9 @@ jobs:
       - name: A global install cannot leave a binary for the next job
         run: python3 tests/global_installs_are_per_job.py
 
+      - name: changed-directly names the diff, changed still runs everything
+        run: python3 tests/changed_paths_directly.py
+
       - name: A downloaded tool lands in the job's temp, not the shared cache
         run: python3 tests/tool_downloads_are_per_job.py
 
@@ -295,6 +298,7 @@ jobs:
         env:
           CHANGED: ${{ needs.changed-paths.outputs.changed }}
           ANY: ${{ needs.changed-paths.outputs.any }}
+          DIRECT: ${{ needs.changed-paths.outputs.changed-directly }}
         run: |
           set -euo pipefail
           echo "changed='$CHANGED' any='$ANY'"
@@ -318,6 +322,24 @@ jobs:
               *) echo "::error::named '$folder', which was not in the input"; exit 1 ;;
             esac
           done
+          # changed-directly is a SUBSET of changed, always. If run-all fired,
+          # changed is everything and direct is the real diff; otherwise they
+          # are equal. A direct folder that is not in changed would mean a job
+          # gated on it runs when the safety catch says it should not.
+          echo "changed-directly='$DIRECT'"
+          for folder in $DIRECT; do
+            case " $CHANGED " in
+              *" $folder "*) ;;
+              *) echo "::error::'$folder' is in changed-directly but not in changed"
+                 exit 1 ;;
+            esac
+          done
+
+          # NOT asserted here: that the two outputs differ. Whether run-all
+          # fires depends on what this particular pull request touched, so an
+          # assertion either way is true by accident. The case that matters is
+          # driven deterministically in tests/changed_paths_directly.py.
+
           echo "changed-paths outputs are well-formed."
 
   # web-ci against a real React + Vite fixture carrying the vendored configs
