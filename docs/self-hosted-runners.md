@@ -12,6 +12,16 @@ We run some CI on our own hardware. This is how, and — more importantly — wh
 
 **No `pull_request_target`.** Enforced by `workflows-ci` — see the check there. On a self-hosted runner it means a stranger's code with a writable token, on our network.
 
+**It must be able to fetch before it registers.** `check-throughput.sh` pulls a real action tarball from `codeload.github.com` and refuses to register the runner if it cannot arrive in 20 seconds — a fifth of the 100 seconds the runner itself allows an action download.
+
+On 2026-10-06 every runner here sat at **6 KB/s for a morning**. The path MTU to the gateway is 1492; the interface was set to 1500. Full-size packets were dropped silently, so the handshake, TLS and first byte stayed fast and only bulk transfer collapsed — to half a percent of the link.
+
+What made it expensive was the shape of the failure, not the fault. Jobs that downloaded an action timed out. Jobs that downloaded nothing passed. GitHub-hosted jobs in the same run passed. So it read as a broken branch, and the first hours went into the repository instead of the network.
+
+A runner that cannot fetch is worse than one that is absent: absent, the job queues and somebody sees a queue. Present and starving, the job lands and fails as though the code were wrong. Refusing is also a pause rather than a decommission — systemd restarts the unit, and the runner joins by itself when the link recovers.
+
+The check stands aside, loudly, when it cannot measure at all: a 404 on the probe URL or a missing `curl` is not evidence about the link, and must never ground the fleet.
+
 ## What runs here, and what does not
 
 | | |

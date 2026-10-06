@@ -78,6 +78,12 @@ jobs:
       - name: The runner setup keeps its safety properties
         run: python3 tests/runner_setup.py
 
+      # A runner that cannot fetch is worse than one that is absent: the job
+      # lands, downloads an action, and dies at GitHub's 100s timeout looking
+      # like a broken branch. That ran for a morning before anyone saw it.
+      - name: A starving runner refuses to register, a broken probe does not
+        run: python3 tests/runner_throughput.py
+
       - name: The runbook does not promise egress controls that are not deployed
         run: python3 tests/egress_claims_match_reality.py
 
