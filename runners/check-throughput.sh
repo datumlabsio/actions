@@ -28,14 +28,33 @@
 # of a healthy link here, so neither a slow afternoon nor a fast one moves it.
 set -uo pipefail
 
-# actions/checkout at the SHA this org pins everywhere, fetched from the host
-# that actually serves action tarballs. Not a synthetic speed test: the point
-# is to measure the path a job will use, including whatever sits in front of it.
-: "${DATUM_PROBE_URL:=https://codeload.github.com/actions/checkout/tar.gz/11bd71901bbe5b1630ceea73d27597364c9af683}"
+# setup-uv at the SHA this org pins, fetched from the host that actually serves
+# action tarballs. Not a synthetic speed test: the point is to measure the path
+# a job will use, including whatever sits in front of it.
+#
+# THE LARGEST ACTION WE PIN, ON PURPOSE. The budget being checked is "can a job
+# fetch what it needs inside the runner's 100-second action-download timeout",
+# and the job that fails first is the one pulling the biggest tarball.
+#
+# DATUM_PROBE_BYTES is the MEASURED size, 2026-10-06. The floor below it is not
+# a round number -- it is derived, because the first version of this file set a
+# 500000 floor against a 424625-byte artifact and so stood aside on every run,
+# verifying nothing and reporting a warning nobody reads. A floor above the
+# payload is a check that can never run.
+# Identity and measured size, together and in that order. The URL is BUILT from
+# the identity rather than written out, so the two cannot drift: changing which
+# artifact is fetched means editing the line directly above its byte count, and
+# a reviewer sees both in one diff. An offline test cannot weigh a remote file;
+# the most it can do is make divergence a deliberate edit rather than a typo.
+DATUM_PROBE_ID="astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d"
+DATUM_PROBE_BYTES=2318343  # measured on the runner VM, 2026-10-06
+: "${DATUM_PROBE_URL:=https://codeload.github.com/${DATUM_PROBE_ID%@*}/tar.gz/${DATUM_PROBE_ID#*@}}"
 : "${DATUM_PROBE_MAX_SECONDS:=20}"
 # A 404 returns in milliseconds and would sail through a timing check. Requiring
-# a real payload is what stops a broken probe URL from reporting a healthy link.
-: "${DATUM_PROBE_MIN_BYTES:=500000}"
+# most of a real payload is what stops a broken probe URL from reporting a
+# healthy link -- and 85% leaves room for the artifact to change slightly
+# without silently disabling the check.
+: "${DATUM_PROBE_MIN_BYTES:=$((DATUM_PROBE_BYTES * 85 / 100))}"
 : "${DATUM_PROBE_ATTEMPTS:=2}"
 
 refuse() {
