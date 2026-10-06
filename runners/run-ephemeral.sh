@@ -44,6 +44,15 @@ fi
 
 cd "$RUNNER_DIR"
 
+# BEFORE registration, not after. A runner that cannot fetch at a usable rate
+# accepts jobs and fails them as though the repository were at fault -- which
+# is exactly what happened on 2026-10-06, for a morning, across every runner.
+# Unregistered, the job queues instead, and a queue is something people see.
+#
+# systemd restarts us, so a link that recovers brings the runner back on its
+# own. Refusing is a pause, not a decommission.
+"${RUNNER_DIR}/check-throughput.sh" || exit 1
+
 # A runner killed mid-job -- OOM, power cut, `systemctl stop` -- leaves .runner
 # behind, and config.sh then refuses with "Cannot configure the runner because
 # it is already configured". Forever, every RestartSec. --replace handles the
