@@ -43,6 +43,10 @@ Set `gate-on: CRITICAL` once the real number is known. Same phase-in as §11 cov
 | `gate-on` | *(empty)* | what **fails** the build |
 | `build-args` | *(empty)* | `KEY=VALUE` per line, into **both** builds |
 | `publish` | `false` | only ever true on the default branch |
+| `registry` | `ghcr.io` | anything else: image goes to `<registry>/<image-name>` via Workload Identity; caller grants `id-token: write` |
+| `workload-identity-provider` | *(empty)* | required unless `ghcr.io`; pass a variable, never a literal |
+| `service-account` | *(empty)* | required unless `ghcr.io` |
+| `platforms` | *(empty)* | e.g. `linux/amd64,linux/arm64`. Trivy scans only the native amd64 build when this is set |
 
 `publish` defaults to false deliberately. A pull request from a fork must not be able to push an image.
 

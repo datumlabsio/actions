@@ -106,13 +106,26 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: read
+      registry:
+        description: "ghcr.io (default, unchanged) or a registry path reached by Workload Identity."
+        type: string
+        default: "ghcr.io"
+      workload-identity-provider: {type: string, default: ""}
+      service-account: {type: string, default: ""}
+      platforms:
+        description: "e.g. linux/amd64,linux/arm64 via buildx. Empty: native build, as before."
+        type: string
+        default: ""
+
+# Deliberately no `permissions:` block at the top: publish takes what the caller
+# grants (packages or id-token write); declaring id-token would break every caller.
 
 jobs:
   lint:
     if: ${{ inputs.hadolint }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -166,6 +179,8 @@ jobs:
     needs: lint
     if: ${{ always() && (needs.lint.result == 'success' || needs.lint.result == 'skipped') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -275,26 +290,46 @@ jobs:
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
-    permissions:
-      contents: read
-      packages: write
     env:
       DOCKERFILE: ${{ inputs.dockerfile }}
       IMAGE: ${{ inputs.image-name || github.event.repository.name }}
       VERSION: ${{ inputs.version }}
       BUILD_ARGS: ${{ inputs.build-args }}
+      REGISTRY: ${{ inputs.registry }}
+      PLATFORMS: ${{ inputs.platforms }}
     steps:
       - name: Check out
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      - if: ${{ inputs.registry != 'ghcr.io' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.workload-identity-provider }}
+          service_account: ${{ inputs.service-account }}
+
+      - if: ${{ inputs.platforms != '' }}
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        env:
+          RUNNER_TOOL_CACHE: ${{ runner.temp }}
+
+      - if: ${{ inputs.platforms != '' }}
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        env:
+          RUNNER_TOOL_CACHE: ${{ runner.temp }}
+
       # A separate job that `needs` the scan, rather than a step after it. A step
       # can be reached by a workflow edit that moves it above the scan; a job
       # dependency cannot be satisfied by a failing scan at all.
-      - name: Publish to GHCR
+      - name: Publish
         run: |
           set -euo pipefail
-          ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${IMAGE}"
-          echo "${{ github.token }}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          if [ "$REGISTRY" = ghcr.io ]; then
+            ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${IMAGE}"
+            echo "${{ github.token }}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          else
+            ref="${REGISTRY}/${IMAGE}"
+            gcloud auth configure-docker "${REGISTRY%%/*}" --quiet
+          fi
 
           # The commit SHA is always a tag, because it is the one that can never
           # be reused. The version is added when a release cut one — without it a
@@ -315,6 +350,13 @@ jobs:
             [ -n "$arg" ] || continue
             build_args+=(--build-arg "$arg")
           done <<< "${BUILD_ARGS:-}"
+
+          # A multi-platform manifest only exists in a registry: build and push at once.
+          if [ -n "${PLATFORMS:-}" ]; then
+            docker buildx build -f "$DOCKERFILE" --platform "$PLATFORMS" \
+              ${build_args[@]+"${build_args[@]}"} "${tags[@]}" --push .
+            exit 0
+          fi
 
           docker build -f "$DOCKERFILE" \
             ${build_args[@]+"${build_args[@]}"} \
