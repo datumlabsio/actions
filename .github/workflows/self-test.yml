@@ -704,6 +704,15 @@ jobs:
   # And the negative case. hadolint has to refuse the bad Dockerfile, so this
   # runs it directly rather than through the workflow — a `uses:` job cannot be
   # continue-on-error, so a job meant to fail would just fail the run.
+  # Package only; self-test never pushes.
+  chart-publish:
+    uses: ./.github/workflows/chart-publish.yml
+    with:
+      registry: ghcr.io/${{ github.repository_owner }}
+      version: v0.0.0-selftest
+      charts-dir: tests/fixtures/chart-publish-ok
+      config-dir: tests/fixtures/gitops-ok
+
   container-ci-blocks:
     runs-on: ubuntu-latest
     steps:
