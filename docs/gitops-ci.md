@@ -35,6 +35,7 @@ jobs:
 | `ignore-missing-schemas` | boolean | `false` | Let kubeconform pass a CR it has no schema for. |
 | `image-pinning` | boolean | `true` | Fail on `:latest` or an untagged image. |
 | `plaintext-secrets` | boolean | `true` | Fail on a Secret with inline data. |
+| `extra-checks` | string | `""` | Shell commands, one per line, run from the repository root after every gate. Empty runs nothing. |
 
 ## A failing gate does not hide the next one
 

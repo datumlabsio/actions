@@ -87,6 +87,13 @@ on:
         type: boolean
         default: true
 
+      extra-checks:
+        description: >-
+          Shell commands for a check only this repo has, one per line, run from
+          the repository root after every gate. Empty runs nothing.
+        type: string
+        default: ""
+
 permissions:
   contents: read
 
@@ -465,6 +472,14 @@ jobs:
 
           PY
 
+      - name: Repo-specific checks
+        id: extra_checks
+        if: ${{ (inputs.extra-checks != '') && !cancelled() && steps.toolchain.outcome == 'success' }}
+        working-directory: ${{ github.workspace }}
+        env:
+          EXTRA_CHECKS: ${{ inputs.extra-checks }}
+        run: bash -euo pipefail -c "$EXTRA_CHECKS"
+
       # A gate that skips itself and a gate that passes are indistinguishable from
       # outside: both green, both exit 0. §11's quarantine check had never run in
       # polaris while CI reported success the whole time.
@@ -486,6 +501,7 @@ jobs:
             image-pinning:${{ inputs.image-pinning }}
             plaintext-secrets:${{ inputs.plaintext-secrets }}
             reusable-paths:${{ inputs.generic-paths != '' }}
+            extra-checks:${{ inputs.extra-checks != '' }}
           # What each step DID, not what was asked of it. The summary used to
           # infer "ran" from the input alone, so a gate skipped behind an
           # earlier failure was reported as having run.
@@ -496,6 +512,7 @@ jobs:
             image-pinning:${{ steps.image_pinning.outcome }}
             plaintext-secrets:${{ steps.plaintext_secrets.outcome }}
             reusable-paths:${{ steps.reusable_paths.outcome }}
+            extra-checks:${{ steps.extra_checks.outcome }}
         run: |
           set -euo pipefail
           skips="$RUNNER_TEMP/datum-skipped.txt"
