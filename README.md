@@ -38,6 +38,7 @@ That is the whole file. If a repo's CI has steps of its own, something has gone 
 | `conformance-audit.yml` | DES §12 — audits repos against what is observable from outside | [docs/conformance-audit.md](docs/conformance-audit.md) |
 | `application.yml` | the caller surface for the `application` archetype | [docs/application-ci.md](docs/application-ci.md) |
 | `container-ci.yml` | lint, build, SBOM, scan, publish to GHCR | [docs/container-ci.md](docs/container-ci.md) |
+| `chart-publish.yml` | lint, package and push Helm charts to an OCI registry | [docs/chart-publish.md](docs/chart-publish.md) |
 | `security-baseline.yml` | Semgrep, gitleaks and a dependency audit — DES §6 | [docs/security-baseline.md](docs/security-baseline.md) |
 | `workflows-ci.yml` | a repo's own automation: actionlint, pins resolve, Renovate config valid | [docs/workflows-ci.md](docs/workflows-ci.md) |
 | `web-ci.yml` | any JS/TS surface — pnpm, Biome, tsc, Vitest with coverage | [docs/web-ci.md](docs/web-ci.md) |

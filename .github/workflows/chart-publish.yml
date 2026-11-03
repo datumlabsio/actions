@@ -1,0 +1,96 @@
+name: chart-publish
+
+# Lint, package and push every Helm chart under charts-dir to an OCI registry.
+# See docs/chart-publish.md. No runner-label: publish holds a registry credential.
+
+on:
+  workflow_call:
+    inputs:
+      registry:
+        description: "Registry path, no oci://. ghcr.io/... uses GITHUB_TOKEN; anything else uses Workload Identity."
+        type: string
+        required: true
+      version:
+        description: "Release tag, v1.4.2. Chart version drops the v; app version keeps it."
+        type: string
+        required: true
+      charts-dir: {type: string, default: "charts"}
+      config-dir: {type: string, default: ".", description: "Where gitops-tool-versions.txt is vendored."}
+      workload-identity-provider: {type: string, default: ""}
+      service-account: {type: string, default: ""}
+      publish: {type: boolean, default: false}
+
+# Deliberately no `permissions:` block: publish needs id-token or packages write,
+# and asking for more than the caller grants fails at startup (as in release.yml).
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      helm: ${{ steps.helm.outputs.version }}
+    env:
+      CONFIG_DIR: ${{ inputs.config-dir }}
+      VERSION: ${{ inputs.version }}
+      CHARTS_DIR: ${{ inputs.charts-dir }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install the pinned helm
+        id: helm
+        run: |
+          set -euo pipefail
+          v=$(grep '^helm=' "$CONFIG_DIR/gitops-tool-versions.txt" | cut -d= -f2)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSL --fail "https://get.helm.sh/helm-${v}-linux-amd64.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/bin" --strip-components=1 linux-amd64/helm
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Lint and package
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] || { echo "::error::version '$VERSION' is not vX.Y.Z"; exit 1; }
+          for chart in "$CHARTS_DIR"/*/; do
+            [ -f "$chart/Chart.yaml" ] || continue
+            helm lint "$chart"
+            helm package "$chart" --version "${VERSION#v}" --app-version "$VERSION" -d "$RUNNER_TEMP/charts"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: charts-${{ inputs.version }}
+          path: ${{ runner.temp }}/charts/*.tgz
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY: ${{ inputs.registry }}
+      HELM: ${{ needs.package.outputs.helm }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: charts-${{ inputs.version }}
+          path: charts
+      - if: ${{ !startsWith(inputs.registry, 'ghcr.io/') }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.workload-identity-provider }}
+          service_account: ${{ inputs.service-account }}
+      - name: Log in and push, retrying once
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -sSL --fail "https://get.helm.sh/helm-${HELM}-linux-amd64.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/bin" --strip-components=1 linux-amd64/helm
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          host="${REGISTRY%%/*}"
+          if [ "$host" = ghcr.io ]; then
+            echo "${{ github.token }}" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          else
+            gcloud auth print-access-token | helm registry login "$host" -u oauth2accesstoken --password-stdin
+          fi
+          for tgz in charts/*.tgz; do
+            helm push "$tgz" "oci://$REGISTRY/charts" || { sleep 15; helm push "$tgz" "oci://$REGISTRY/charts"; }
+          done
