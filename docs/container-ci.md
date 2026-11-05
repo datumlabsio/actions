@@ -47,6 +47,7 @@ Set `gate-on: CRITICAL` once the real number is known. Same phase-in as §11 cov
 | `workload-identity-provider` | *(empty)* | required unless `ghcr.io`; pass a variable, never a literal |
 | `service-account` | *(empty)* | required unless `ghcr.io` |
 | `platforms` | *(empty)* | e.g. `linux/amd64,linux/arm64`. Trivy scans only the native amd64 build when this is set |
+| `latest` | `true` | also move `latest` to this build, pushed after the SHA and version tags. Set `false` for a registry with tag immutability (Artifact Registry), which refuses to move it |
 
 `publish` defaults to false deliberately. A pull request from a fork must not be able to push an image.
 

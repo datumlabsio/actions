@@ -116,6 +116,15 @@ on:
         description: "e.g. linux/amd64,linux/arm64 via buildx. Empty: native build, as before."
         type: string
         default: ""
+      latest:
+        description: >-
+          Also move the `latest` tag to this build. On by default, as always.
+          Off for a registry with tag immutability (Artifact Registry's
+          registry-0): there a tag can be written once, so `latest` succeeds on
+          the first push and refuses every one after, and a moving tag has no
+          meaning on such a registry anyway.
+        type: boolean
+        default: true
 
 # Deliberately no `permissions:` block at the top: publish takes what the caller
 # grants (packages or id-token write); declaring id-token would break every caller.
@@ -297,6 +306,7 @@ jobs:
       BUILD_ARGS: ${{ inputs.build-args }}
       REGISTRY: ${{ inputs.registry }}
       PLATFORMS: ${{ inputs.platforms }}
+      LATEST: ${{ inputs.latest }}
     steps:
       - name: Check out
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -335,9 +345,12 @@ jobs:
           # be reused. The version is added when a release cut one — without it a
           # published image cannot be named by the release it belongs to, which
           # is most of the point of publishing on a release.
-          tags=(-t "${ref}:${GITHUB_SHA}" -t "${ref}:latest")
+          tags=(-t "${ref}:${GITHUB_SHA}")
           if [ -n "${VERSION:-}" ]; then
             tags+=(-t "${ref}:${VERSION}")
+          fi
+          if [ "${LATEST}" = "true" ]; then
+            tags+=(-t "${ref}:latest")
           fi
 
           # THE SAME ARGS THE SCANNED BUILD GOT, and that is not a convenience:
@@ -361,11 +374,15 @@ jobs:
           docker build -f "$DOCKERFILE" \
             ${build_args[@]+"${build_args[@]}"} \
             "${tags[@]}" .
+          # The version before `latest`: the version is the tag a release is
+          # named by, and a refused `latest` must not take it down with it.
           docker push "${ref}:${GITHUB_SHA}"
-          docker push "${ref}:latest"
           if [ -n "${VERSION:-}" ]; then
             docker push "${ref}:${VERSION}"
             echo "Published ${ref}:${VERSION} and ${ref}:${GITHUB_SHA}"
           else
             echo "Published ${ref}:${GITHUB_SHA}"
+          fi
+          if [ "${LATEST}" = "true" ]; then
+            docker push "${ref}:latest"
           fi
