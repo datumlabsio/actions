@@ -199,9 +199,23 @@ jobs:
       SEVERITY: ${{ inputs.scan-severity }}
       GATE_ON: ${{ inputs.gate-on }}
       BUILD_ARGS: ${{ inputs.build-args }}
+      PLATFORMS: ${{ inputs.platforms }}
     steps:
       - name: Check out
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # The same two setup steps publish runs, at the same pins: a platform the
+      # runner is not (arm64 on ubuntu-latest) builds under QEMU here exactly as
+      # it will there. Skipped without `platforms`, so that path is unchanged.
+      - if: ${{ inputs.platforms != '' }}
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        env:
+          RUNNER_TOOL_CACHE: ${{ runner.temp }}
+
+      - if: ${{ inputs.platforms != '' }}
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        env:
+          RUNNER_TOOL_CACHE: ${{ runner.temp }}
 
       - name: Install the pinned tools
         run: |
@@ -220,6 +234,13 @@ jobs:
       # Built locally and NOT pushed. The image the scan runs against has to be
       # the image that would be published — scanning a rebuild proves nothing
       # about what ships.
+      #
+      # EVERY PLATFORM publish will push, not just the runner's own. publish
+      # builds `platforms` with buildx and pushes them all; before this, only the
+      # native amd64 build was scanned here, so an arm64 half reached the
+      # registry having passed no scan and no gate (actions #113). Each platform
+      # is built and loaded under its own tag, and the steps below run on each.
+      # Without `platforms`: one native build under the one tag, as before.
       - name: Build
         run: |
           set -euo pipefail
@@ -232,27 +253,66 @@ jobs:
             [ -n "$arg" ] || continue
             build_args+=(--build-arg "$arg")
           done <<< "${BUILD_ARGS:-}"
-          docker build -f "$DOCKERFILE" \
-            ${build_args[@]+"${build_args[@]}"} \
-            -t "ci-candidate:$GITHUB_SHA" .
+          candidates="$RUNNER_TEMP/candidates.txt"
+          : > "$candidates"
+          if [ -z "${PLATFORMS:-}" ]; then
+            docker build -f "$DOCKERFILE" \
+              ${build_args[@]+"${build_args[@]}"} \
+              -t "ci-candidate:$GITHUB_SHA" .
+            echo "ci-candidate:$GITHUB_SHA" >> "$candidates"
+          else
+            # `--load` takes one platform at a time, hence the loop.
+            IFS=',' read -ra platforms <<< "$PLATFORMS"
+            for platform in "${platforms[@]}"; do
+              platform="$(tr -d '[:space:]' <<< "$platform")"
+              [ -n "$platform" ] || continue
+              tag="ci-candidate:$GITHUB_SHA-${platform//\//-}"
+              docker buildx build -f "$DOCKERFILE" --platform "$platform" \
+                ${build_args[@]+"${build_args[@]}"} \
+                --load -t "$tag" .
+              echo "$tag" >> "$candidates"
+            done
+            if [ ! -s "$candidates" ]; then
+              echo "::error::platforms is set to '$PLATFORMS', which names no platform."
+              exit 1
+            fi
+          fi
 
+      # One SBOM per candidate. Without `platforms` it is sbom.spdx.json, as
+      # before; with it, sbom-<os>-<arch>.spdx.json each, in the same artifact.
       - name: SBOM
         if: ${{ inputs.sbom }}
-        run: syft "ci-candidate:$GITHUB_SHA" -o spdx-json > sbom.spdx.json
+        run: |
+          set -euo pipefail
+          if [ -z "${PLATFORMS:-}" ]; then
+            syft "ci-candidate:$GITHUB_SHA" -o spdx-json > sbom.spdx.json
+          else
+            while IFS= read -r tag; do
+              syft "$tag" -o spdx-json > "sbom-${tag#"ci-candidate:$GITHUB_SHA-"}.spdx.json"
+            done < "$RUNNER_TEMP/candidates.txt"
+          fi
 
       - name: Keep the SBOM
         if: ${{ inputs.sbom }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sbom-${{ github.sha }}
-          path: ${{ inputs.working-directory }}/sbom.spdx.json
+          path: ${{ inputs.working-directory }}/sbom*.spdx.json
           if-no-files-found: error
           retention-days: 30
 
+      # Every candidate is reported, and with gate-on every one is gated: one
+      # platform over the line fails the job, and publish never starts.
       - name: Scan
         run: |
           set -euo pipefail
-          trivy image --severity "$SEVERITY" --no-progress "ci-candidate:$GITHUB_SHA"
+          mapfile -t candidates < "$RUNNER_TEMP/candidates.txt"
+          for candidate in "${candidates[@]}"; do
+            if [ "${#candidates[@]}" -gt 1 ]; then
+              echo "=== $candidate"
+            fi
+            trivy image --severity "$SEVERITY" --no-progress "$candidate"
+          done
 
           if [ -z "${GATE_ON:-}" ]; then
             echo "::notice::Reporting only — no severity is gating yet."
@@ -261,7 +321,9 @@ jobs:
             exit 0
           fi
           echo "Gating on: $GATE_ON"
-          trivy image --severity "$GATE_ON" --exit-code 1 --no-progress "ci-candidate:$GITHUB_SHA"
+          for candidate in "${candidates[@]}"; do
+            trivy image --severity "$GATE_ON" --exit-code 1 --no-progress "$candidate"
+          done
 
       # A security gate that runs DEGRADED is the worst of the three states: it is
       # green, it did something, and what it did is not what the caller assumes.
@@ -285,6 +347,11 @@ jobs:
               echo "| **Ran degraded** | ${notes} |"
             else
               echo "| Ran | fully configured |"
+            fi
+            # Which platforms the scan covered, so "every platform publish
+            # pushes was scanned" can be read off the run, not assumed.
+            if [ -n "${PLATFORMS:-}" ]; then
+              echo "| Scanned platforms | ${PLATFORMS} |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

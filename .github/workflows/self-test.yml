@@ -685,6 +685,24 @@ jobs:
       build-args: |
         PROFILE=heavy
 
+  # platforms, against the same fixture as container-ci. Every platform publish
+  # would push has to be built, SBOMed and scanned in build-scan first (#113);
+  # linux/arm64 builds under QEMU on the amd64 runner, so this is the job that
+  # proves that path end to end. Its base is pinned by the digest of a
+  # multi-arch index, which is what lets the arm64 half resolve at all.
+  # publish stays false here as everywhere in self-test.
+  container-ci-platforms:
+    uses: ./.github/workflows/container-ci.yml
+    # Same startup-time grant as container-ci above, and for the same reason:
+    # permission is checked before any `if:`, so a skipped publish job still
+    # has to be grantable.
+    permissions:
+      contents: read
+      packages: write
+    with:
+      working-directory: tests/fixtures/container-ok
+      platforms: linux/amd64,linux/arm64
+
   # The vendored hadolint config, against a fixture whose Dockerfile hadolint
   # REFUSES by default. Its `apt-get install` is deliberately unpinned — DL3008,
   # the one rule configs/hadolint.yaml waives — and everything else about it is

@@ -46,7 +46,7 @@ Set `gate-on: CRITICAL` once the real number is known. Same phase-in as §11 cov
 | `registry` | `ghcr.io` | anything else: image goes to `<registry>/<image-name>` via Workload Identity; caller grants `id-token: write` |
 | `workload-identity-provider` | *(empty)* | required unless `ghcr.io`; pass a variable, never a literal |
 | `service-account` | *(empty)* | required unless `ghcr.io` |
-| `platforms` | *(empty)* | e.g. `linux/amd64,linux/arm64`. Trivy scans only the native amd64 build when this is set |
+| `platforms` | *(empty)* | e.g. `linux/amd64,linux/arm64`. `build-scan` builds, SBOMs and scans **every** platform listed (a non-native one under QEMU), and `gate-on` applies to each, before `publish` pushes them; see [`platforms`](#platforms) |
 | `latest` | `true` | also move `latest` to this build, pushed after the SHA and version tags. Set `false` for a registry with tag immutability (Artifact Registry), which refuses to move it |
 
 `publish` defaults to false deliberately. A pull request from a fork must not be able to push an image.
@@ -68,6 +68,21 @@ The args go to the scanned build **and** the published build, because those must
 
 **Never pass a secret.** A build argument is recorded in the image's own metadata, and `docker history` prints it back out of any pulled copy — a token passed here ships to everyone who can pull the image. Use it for build-time *shape*: a profile, a variant, a feature flag. Nothing that would matter if it were published, because it is.
 
+### `platforms`
+
+```yaml
+with:
+  platforms: linux/amd64,linux/arm64
+```
+
+`publish` builds every listed platform with buildx and pushes them as one multi-arch image. So `build-scan` builds every one of them first, loads each under its own tag (`ci-candidate:<sha>-linux-arm64`), writes an SBOM per platform (`sbom-linux-arm64.spdx.json`, all in the one `sbom-<sha>` artifact), and runs Trivy on each. With `gate-on`, one platform over the line fails the job, and publish never starts. The run summary lists the platforms that were scanned.
+
+Before #113 was fixed, only the runner's native amd64 build was scanned, and an arm64 half reached the registry having passed no scan.
+
+**The cost is time.** A platform the runner is not (arm64 on `ubuntu-latest`) builds under QEMU, which is several times slower than native, and it now builds twice: once here to be scanned, once in `publish` to be pushed, as the native build always has. Leave `platforms` empty unless something actually runs the other architecture.
+
+Without `platforms`, nothing changes: one native `docker build`, one `sbom.spdx.json`, one scan.
+
 ## The hadolint config
 
 The lint stage reads `<config-dir>/hadolint.yaml` if the repo has vendored one, exactly as it reads `container-tool-versions.txt`. **Absent means unchanged** — hadolint's built-in defaults, which is what every caller got before the file existed.
@@ -84,6 +99,6 @@ I wrote the capitalised form from memory and it would have 404'd on the first ru
 
 ## Verified
 
-`self-test` runs the workflow against `tests/fixtures/container-ok` — which builds for real, from a base pinned by a **resolvable** digest, because a fixture that cannot build proves nothing about a workflow whose job is building.
+`self-test` runs the workflow against `tests/fixtures/container-ok` — which builds for real, from a base pinned by a **resolvable** digest, because a fixture that cannot build proves nothing about a workflow whose job is building. It runs it a second time with `platforms: linux/amd64,linux/arm64`, so the multi-platform path (QEMU, a build, SBOM and scan per platform) is exercised on every pull request too.
 
 And directly against `tests/fixtures/container-bad`, which must be refused: `:latest`, unpinned apt packages, no cache cleanup, `ADD` from a URL, and a shell-form `CMD`.
