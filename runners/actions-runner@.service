@@ -36,19 +36,23 @@ EnvironmentFile=/etc/actions-runner.env
 #               `pipx install semgrep` followed by `semgrep: command not found`
 #   PIP_BREAK…  Ubuntu 24.04 is PEP 668 managed, so a bare `pip install` fails
 #               with externally-managed-environment. GitHub's image allows it.
-ExecStart=/usr/bin/env HOME=/opt/actions-runner-%i RUNNER_DIR=/opt/actions-runner-%i RUNNER_TOOL_CACHE=/opt/hostedtoolcache AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache PIP_BREAK_SYSTEM_PACKAGES=1 PATH=/opt/actions-runner-%i/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/actions-runner-%i/run-ephemeral.sh
+#
+# NO RUNNER_TOOL_CACHE / AGENT_TOOLSDIRECTORY. They pointed every runner at one
+# shared, read-only tool cache, and setup-uv cannot be redirected from a
+# workflow once the runner fixes the directory at startup: the day uv 0.12.21
+# shipped, every Python job failed at `mkdir /opt/hostedtoolcache/uv/0.12.21`.
+# Unset, each runner keeps its tools in its own _work/_tool.
+ExecStart=/usr/bin/env HOME=/opt/actions-runner-%i RUNNER_DIR=/opt/actions-runner-%i PIP_BREAK_SYSTEM_PACKAGES=1 PATH=/opt/actions-runner-%i/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/actions-runner-%i/run-ephemeral.sh
 Restart=always
 RestartSec=5
 
 # The runner executes dependency installs from npm and PyPI. It should not be
-# able to reach anything on this box that it does not need. The tool cache is
-# listed here only while it is being populated; lock it root-owned and
-# read-only afterwards, or one job can plant a binary the next job runs.
+# able to reach anything on this box that it does not need.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/actions-runner-%i /opt/hostedtoolcache
+ReadWritePaths=/opt/actions-runner-%i
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true

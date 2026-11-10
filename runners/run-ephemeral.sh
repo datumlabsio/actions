@@ -51,7 +51,12 @@ cd "$RUNNER_DIR"
 #
 # systemd restarts us, so a link that recovers brings the runner back on its
 # own. Refusing is a pause, not a decommission.
-"${RUNNER_DIR}/check-throughput.sh" || exit 1
+# WAIT, do not exit. This used to be `check-throughput.sh || exit 1`, and each
+# exit counted toward the unit's StartLimitBurst: twenty refusals in five
+# minutes and systemd stopped the runner for good. wait-until-ready.sh runs the
+# same throughput check, plus disk and network, and simply does not return
+# until all three pass -- so a refusal is the pause it was always meant to be.
+"${RUNNER_DIR}/wait-until-ready.sh"
 
 # A runner killed mid-job -- OOM, power cut, `systemctl stop` -- leaves .runner
 # behind, and config.sh then refuses with "Cannot configure the runner because

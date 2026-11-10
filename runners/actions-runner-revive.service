@@ -1,0 +1,7 @@
+# See revive-runners.sh. Runs as root because reset-failed needs it.
+[Unit]
+Description=Give failed GitHub Actions runners another chance
+
+[Service]
+Type=oneshot
+ExecStart=/opt/actions-runner/revive-runners.sh

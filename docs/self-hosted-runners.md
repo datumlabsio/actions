@@ -12,7 +12,7 @@ We run some CI on our own hardware. This is how, and — more importantly — wh
 
 **No `pull_request_target`.** Enforced by `workflows-ci` — see the check there. On a self-hosted runner it means a stranger's code with a writable token, on our network.
 
-**It must be able to fetch before it registers.** `check-throughput.sh` pulls a real action tarball from `codeload.github.com` and refuses to register the runner if it cannot arrive in 20 seconds — a fifth of the 100 seconds the runner itself allows an action download.
+**It must be able to fetch before it registers.** `check-throughput.sh` pulls a real action tarball from `codeload.github.com` and holds the runner back — unregistered — if it cannot arrive in 20 seconds, a fifth of the 100 seconds the runner itself allows an action download. It holds it back by **waiting**, not by exiting: see *Disk* for why an exit is a trap.
 
 On 2026-10-06 every runner here sat at **6 KB/s for a morning**. The path MTU to the gateway is 1492; the interface was set to 1500. Full-size packets were dropped silently, so the handshake, TLS and first byte stayed fast and only bulk transfer collapsed — to half a percent of the link.
 
@@ -108,7 +108,7 @@ If this machine is compromised, the worst that credential does is register and r
 **4. Copy in the scripts, units and the egress ruleset** from `runners/` in this repository, then:
 
 ```bash
-sudo systemctl enable --now reclaim-disk.timer
+sudo systemctl enable --now reclaim-disk.timer actions-runner-revive.timer
 ```
 
 **5. Ten runners, not one.** One runner is a queue of one: fourteen jobs that
@@ -128,7 +128,6 @@ for i in $(seq 1 $N); do
     mkdir -p "$D/_work"; }
   chown -R runner:runner "$D"
 done
-mkdir -p /opt/hostedtoolcache && chown runner:runner /opt/hostedtoolcache
 systemctl daemon-reload
 systemctl enable --now $(seq -f 'actions-runner@%g' 1 $N)
 SETUP
@@ -139,7 +138,7 @@ The template unit is `runners/actions-runner@.service`. Four things in its
 
 ```
 ExecStart=/usr/bin/env HOME=/opt/actions-runner-%i RUNNER_DIR=/opt/actions-runner-%i \
-  RUNNER_TOOL_CACHE=/opt/hostedtoolcache PIP_BREAK_SYSTEM_PACKAGES=1 \
+  PIP_BREAK_SYSTEM_PACKAGES=1 \
   PATH=/opt/actions-runner-%i/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   /opt/actions-runner-%i/run-ephemeral.sh
 ```
@@ -160,10 +159,31 @@ ExecStart=/usr/bin/env HOME=/opt/actions-runner-%i RUNNER_DIR=/opt/actions-runne
   `python3 -m pip install` — which `gitops-ci` does for PyYAML — fails with
   `externally-managed-environment`. GitHub's image permits it; this restores
   parity.
+- **No `RUNNER_TOOL_CACHE` or `AGENT_TOOLSDIRECTORY`.** Both once pointed every
+  runner at one shared, read-only tool cache. The runner fixes that directory
+  at startup, so a workflow cannot redirect it: the day uv 0.12.21 shipped,
+  every Python job failed at `mkdir /opt/hostedtoolcache/uv/0.12.21`. Unset,
+  each runner keeps its tools in its own `_work/_tool`.
 
 Also set `StartLimitIntervalSec=300` / `StartLimitBurst=20` in `[Unit]`, so a
 persistent failure stops instead of hammering GitHub's registration endpoint
 every five seconds. Ours did that unnoticed for ninety seconds, twice.
+
+**On its own that limit is a trap, and it caught us.** It stops a runner *for
+good*, until somebody runs `reset-failed`. On 2026-11-10 the disk was full,
+every runner exited twenty times in five minutes, and all ten stayed dead —
+the fleet had been off for eight days by then. Two things now stand between a
+bad moment and a dead fleet:
+
+- **`wait-until-ready.sh`** — before registering, a runner checks disk,
+  network and throughput, and *waits* (5 s doubling to 300 s) until all three
+  pass. It never exits, so nothing counts toward the limit, and it rejoins on
+  its own. A power cut that brings the VM up before the office network is
+  exactly this case. Why it is waiting, readable without sudo:
+  `cat /opt/actions-runner-*/_diag/not-ready`
+- **`actions-runner-revive.timer`** — every 15 minutes, any runner in the
+  *failed* state gets one more round. That is for the failures we have not met
+  yet. A runner somebody *stopped* on purpose is left alone.
 
 **Two traps in the ephemeral loop itself**, both invisible until a runner is
 killed mid-job:
@@ -200,11 +220,31 @@ Watch it for a week before widening. A runner that works for one repository is e
 
 ## Disk
 
-`reclaim-disk.sh` runs hourly and escalates: prune containers and build cache always, unused images past 75%, everything past 85%.
+**On 2026-11-10 the disk was 100% full and every runner was dead.** The
+cleanup had run hourly for six weeks and cleaned nothing: it pruned Docker,
+which this VM does not have, and it looked in `/opt/actions-runner`, which no
+runner had used since there were ten of them. What actually filled 65 GB was
+download caches in each runner's home — pnpm's store, uv's cache — and a second
+copy of the runner itself, left behind by its own self-update.
 
-Past 85% after a full prune it exits non-zero — **and that is quieter than it sounds.** The script emits `::error::`, which is a GitHub Actions workflow command and means nothing to systemd; here it is a literal string in the journal. The unit enters `failed`, and `systemctl --failed` is not somewhere anyone looks.
+`reclaim-disk.sh` now finds every runner by directory (`actions-runner-*`, each
+with its own `run-ephemeral.sh` — never from `RUNNER_DIR`, which still names
+the old one) and escalates:
 
-So the honest description today: it records the problem where a person could find it, if they already knew to look. **Nothing notifies.** Until that is wired to the Slack path, this is the first thing to check when jobs start failing for unrelated-looking reasons.
+| disk | idle runners lose |
+|---|---|
+| always | runner versions no longer in use (a day old, so an update still unpacking is safe), diag logs over a week |
+| 70% | download caches and the tool cache — `.pnpm-store`, `.cache`, `.npm/_cacache`, `_work/_tool` |
+| 85% | the whole work tree and pipx's tools |
+
+**Never anything under a running job** — a runner with a `Runner.Worker`
+process is skipped and picked up next hour.
+
+If the disk is still over 85% afterwards it exits 1, and that still reaches
+nobody directly: it runs under systemd, where nothing reads its output. What
+reaches a person is the chain after it — a runner short of disk waits in
+`wait-until-ready.sh` instead of registering, `runner-watch` sees it offline,
+and that is the Slack alert.
 
 This is the most common way a self-hosted runner dies. It is a timer from day one, not a thing to add after the first outage.
 
@@ -345,11 +385,15 @@ gh variable set DATUM_RUNNER_OFFLINE --org datumlabsio --body true --visibility 
 
 **Caching between jobs.** Ephemeral runners start cold every time. That is the cost of rule two and it is not negotiable for a speed gain.
 
-The shared tool cache at `/opt/hostedtoolcache` is not an exception to that, as
-long as it is **root-owned and read-only to jobs**. A writable shared cache
-would let one job plant a binary the next job executes, which is precisely what
-rule two exists to prevent. Populate it under a commit you control, then lock
-it.
+**What is actually true today, and is not decided.** Each runner keeps its
+own download caches and tool cache (`.pnpm-store`, `.cache`, `_work/_tool`)
+between *its own* jobs. A per-job wipe of `_work/_tool` was added on
+2026-09-30 and lost when `run-ephemeral.sh` was redeployed on 2026-10-06.
+`reclaim-disk.sh` bounds their size; it does not make them per-job. The
+choice is between restoring the wipe — rule two, and slower CI on this uplink
+— and accepting that a job can leave a file the next job on the same runner
+reads. That is a decision, not something this document should settle by
+describing it.
 
 **Container builds.** See above.
 
@@ -391,6 +435,20 @@ the case for self-hosting is the Actions budget cap and where the code runs —
 not speed, and not really cost either.
 
 ## If it is on fire
+
+Before anything else, find out *why* — three commands on the VM answer most of it:
+
+```bash
+cat /opt/actions-runner-*/_diag/not-ready     # what each waiting runner is waiting for
+df -h /                                        # a full disk kills every runner at once
+systemctl list-units 'actions-runner@*' --state=failed
+```
+
+If those are clean and the runners are still offline, check the VM is running
+at all, on its hypervisor. Set it to start at boot — but a VM somebody shut
+down stays down regardless.
+
+To take the fleet out of service:
 
 ```bash
 sudo systemctl stop actions-runner.service                                    # on the VM

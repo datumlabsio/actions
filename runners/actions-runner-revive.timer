@@ -1,0 +1,11 @@
+# Every fifteen minutes, and once shortly after boot -- a power cut can bring
+# this VM up before the network, and that is exactly when runners fail.
+[Unit]
+Description=Revive failed GitHub Actions runners every fifteen minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target
