@@ -65,7 +65,7 @@ jobs:
     runs-on: ${{ vars.DATUM_RUNNER_OFFLINE == 'true' && 'ubuntu-latest' || inputs.runner-label }}
     steps:
       - name: Check out
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v5.0.0
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # Into the job's own temp, not the shared read-only tool cache. Why:
       # python-ci.yml, on its own Install uv step.
