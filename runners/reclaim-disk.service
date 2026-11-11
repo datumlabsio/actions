@@ -4,4 +4,15 @@ Description=Reclaim runner disk
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/actions-runner.env
-ExecStart=/opt/actions-runner/reclaim-disk.sh
+# /usr/local/sbin, not /opt/actions-runner: root runs this, and the runner
+# user owns everything under /opt/actions-runner. A root script in a
+# directory that user can write is a root shell for anything running as it.
+ExecStart=/usr/local/sbin/reclaim-disk.sh
+# Root, deleting inside directories that every job can write. reclaim-disk.sh
+# follows no symlink; if that ever gives, everything outside /opt is read-only
+# here, so a planted link reaches the runners and not the machine.
+ProtectSystem=strict
+ReadWritePaths=/opt
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true

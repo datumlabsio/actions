@@ -71,12 +71,52 @@ check("the group is required, not defaulted",
 
 # --- disk -----------------------------------------------------------------
 check("a disk reclaim timer exists", "OnCalendar=hourly" in timer)
+# The escalation itself -- which tier deletes what, and never under a running
+# job -- is driven for real by tests/reclaim_disk.py. These only pin the shape.
 check("reclaim escalates rather than nuking every time",
-      "until=24h" in disk and "--volumes" in disk,
-      "always dropping every image makes each build cold for no reason")
-check("it FAILS when the disk is still full after a full prune",
-      "::error::" in disk and "exit 1" in disk,
+      "DISK_WARN_PCT" in disk and "DISK_CRIT_PCT" in disk,
+      "a warm cache saves real time on a slow uplink; drop it only when the disk is the problem")
+check("it FAILS when the disk is still full after cleaning",
+      "exit 1" in disk,
       "a silent failure here surfaces later as unrelated-looking job failures")
+check("...and does not dress that up as a GitHub annotation",
+      "::error::" not in disk and "::warning::" not in disk,
+      "reclaim-disk runs under systemd, where `::error::` is a literal string in a "
+      "journal nobody reads. That is how it failed every hour for six weeks unseen")
+check("reclaim finds every runner by directory, not from RUNNER_DIR",
+      "actions-runner-*" in disk and "RUNNER_DIR" not in disk,
+      "the env file still names the old single-runner directory; reading it is "
+      "how the previous version cleaned nothing for six weeks")
+# The script refuses to follow links -- tests/reclaim_disk.py plants them and
+# watches. This is the second wall: root deleting in job-writable directories,
+# with everything outside /opt read-only to it should the first ever give.
+for name in ("reclaim-disk.service", "actions-runner-revive.service"):
+    u = code_only((R / name).read_text())
+    exe = re.search(r"^ExecStart=(\S+)", u, re.M)
+    check(f"{name} runs as root a script only root can write",
+          exe is not None and "User=" not in u and not exe.group(1).startswith("/opt/"),
+          "the runner user owns /opt/actions-runner; a root script there is a root "
+          "shell for anything that runs as that user")
+reclaim_unit = code_only((R / "reclaim-disk.service").read_text())
+check("reclaim runs as root in a sandbox where only /opt can be written",
+      re.search(r"^ProtectSystem=strict$", reclaim_unit, re.M) is not None
+      and re.search(r"^ReadWritePaths=/opt$", reclaim_unit, re.M) is not None,
+      "it deletes inside directories every job can write; one followed link "
+      "outside /opt must hit a read-only filesystem, not the machine")
+
+# --- a runner that is not ready waits; it does not exit -------------------
+check("run-ephemeral.sh waits for readiness instead of exiting",
+      "wait-until-ready.sh" in run and "check-throughput.sh" not in run,
+      "every exit counts toward StartLimitBurst; twenty refusals stop the runner for good")
+revive = (R / "actions-runner-revive.timer").read_text()
+check("a revive timer gives failed runners another chance",
+      "OnUnitActiveSec" in revive and "OnBootSec" in revive and "timers.target" in revive,
+      "StartLimitBurst stops a runner for good; on 2026-11-10 nobody came for eight days")
+check("the unit points no runner at a shared tool cache",
+      "RUNNER_TOOL_CACHE" not in tmpl and "AGENT_TOOLSDIRECTORY" not in tmpl
+      and "hostedtoolcache" not in tmpl,
+      "setup-uv cannot be redirected once the runner fixes the directory: the day "
+      "uv 0.12.21 shipped, every Python job failed writing to the shared one")
 
 # --- the rules are written where somebody will read them -------------------
 for phrase, why in [

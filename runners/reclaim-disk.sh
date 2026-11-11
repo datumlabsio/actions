@@ -1,53 +1,136 @@
 #!/usr/bin/env bash
 # Reclaim disk before it runs out, not after.
 #
-# GitHub gives every job a clean 14 GB and throws the machine away. On our own
-# hardware the NODE keeps everything: image layers, build caches, node_modules,
-# Trivy's ~1 GB vulnerability database re-downloaded as it updates. Ephemeral
-# runners clear the WORK directory, not the Docker store underneath it.
+# WHAT ACTUALLY FILLS IT. Not image layers -- this VM runs no container jobs and
+# has no Docker. On 2026-11-10 the disk was 100% full, and the 65 GB that came
+# back was download caches in each runner's home (pnpm's store, uv's cache) and
+# a second copy of the runner itself, left behind by its own self-update.
 #
-# A full disk is the most common way a self-hosted runner dies, and it does not
-# fail cleanly -- jobs start, then fail somewhere in the middle with an error
-# about the thing they were doing rather than about disk.
+# The version before this pruned Docker, which is not installed, and looked in
+# /opt/actions-runner, which no runner has used since there were ten of them.
+# It cleaned nothing for six weeks, and reported each run to a journal nobody
+# reads. That is the failure this file now has to be tested against.
 #
-# Runs hourly. Cheap when there is nothing to do.
-set -euo pipefail
+# EVERY RUNNER, FOUND BY DIRECTORY: $RUNNER_ROOT/actions-runner-N, each with its
+# own run-ephemeral.sh. Not from a count, and NOT from RUNNER_DIR -- the env
+# file still names the old single-runner directory, which is exactly how the
+# previous version missed all ten.
+#
+# NEVER UNDER A RUNNING JOB. A runner with a Runner.Worker process is mid-job;
+# its caches and work tree are left alone and it is picked up next hour.
+#
+# NOTHING HERE FOLLOWS A LINK. This runs as root, deleting inside directories
+# that every job can write. A job -- or a compromised package it installs --
+# can leave `_work` as a symlink to `/`, fill the disk to reach the critical
+# tier, and `rm -rf "$d/_work/"*` would then empty the machine as root. So a
+# path is removed only if no part of it below the runner's directory is a
+# symlink, and a planted link is reported, never obeyed. The unit's sandbox
+# (read-only outside /opt) is the second wall, not the first.
+#
+# TIERS. A warm cache saves real time on a slow uplink, until the disk is the
+# problem:
+#   always            runner versions no longer in use -- older than a day, so
+#                     an update still unpacking is never touched -- and diag
+#                     logs older than a week
+#   >= DISK_WARN_PCT  idle runners: download caches and the tool cache
+#   >= DISK_CRIT_PCT  idle runners: the whole work tree and pipx's tools
+#
+# Hourly, as root. Exits 1 if the disk is still critical afterwards. It cannot
+# tell anyone itself: a runner whose disk stays full waits in
+# wait-until-ready.sh instead of registering, runner-watch sees it offline, and
+# that is the alert.
+set -uo pipefail
+shopt -s nullglob
 
-: "${RUNNER_DIR:=/opt/actions-runner}"
-: "${DISK_WARN_PCT:=75}"
+: "${RUNNER_ROOT:=/opt}"
+: "${DISK_WARN_PCT:=70}"
 : "${DISK_CRIT_PCT:=85}"
 
-used() { df --output=pcent "$1" | tail -1 | tr -dc '0-9'; }
+used() { df -P "$RUNNER_ROOT" 2>/dev/null | awk 'NR == 2 { sub("%", "", $5); print $5 + 0 }'; }
 
-before=$(used "$RUNNER_DIR")
-echo "$(date -u +%FT%TZ) disk ${before}% before"
+# The worker exists only while a job runs, as $dir/bin/Runner.Worker. The `/`
+# after the directory keeps actions-runner-1 from matching actions-runner-10.
+busy() { pgrep -f "^$1/bin[^/ ]*/Runner\.Worker" >/dev/null 2>&1; }
 
-# Always safe: anything not referenced by a live container or image.
-docker container prune -f  >/dev/null 2>&1 || true
-docker builder prune -f    >/dev/null 2>&1 || true
+# no_links DIR REL: true when no component of DIR/REL is a symlink. Split with
+# read, not an unquoted expansion, so nothing in REL can glob.
+no_links() {
+  local p=$1 part parts
+  IFS=/ read -r -a parts <<< "$2"
+  for part in "${parts[@]}"; do
+    [ -n "$part" ] || continue
+    p="$p/$part"
+    if [ -L "$p" ]; then
+      echo "  ${1##*/}: ${p#"$1"/} is a symlink -- not followed, not removed" >&2
+      return 1
+    fi
+  done
+}
 
-if [ "$(used "$RUNNER_DIR")" -ge "$DISK_WARN_PCT" ]; then
-  # Images unused for a day. Keeps today's base layers, so the next build is
-  # still warm, and drops last week's.
-  docker image prune -af --filter "until=24h" >/dev/null 2>&1 || true
+# scrub DIR REL...: remove each DIR/REL that no_links clears.
+scrub() {
+  local d=$1 rel
+  shift
+  for rel in "$@"; do
+    no_links "$d" "$rel" && rm -rf -- "${d:?}/$rel"
+  done
+}
+
+# empty DIR REL: remove what is inside DIR/REL, keeping REL itself.
+empty() {
+  no_links "$1" "$2" && [ -d "$1/$2" ] || return 0
+  find "$1/$2" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+}
+
+runners=()
+for d in "$RUNNER_ROOT"/actions-runner-*/; do
+  [ -f "${d}run-ephemeral.sh" ] && runners+=("${d%/}")
+done
+
+before=$(used)
+echo "$(date -u +%FT%TZ) disk ${before}% before, ${#runners[@]} runner(s)"
+
+for d in "${runners[@]}"; do
+  # `bin` is a symlink to the version in use. Only act on a target that ends in
+  # a plain version number; anything unexpected is left alone rather than
+  # guessed at, because guessing wrong deletes the runner that is running.
+  cur=$(readlink "$d/bin" 2>/dev/null)
+  cur=${cur##*bin.}
+  if [[ "$cur" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+    find "$d" -maxdepth 1 -mindepth 1 \( -name 'bin.*' -o -name 'externals.*' \) \
+      ! -name "bin.$cur" ! -name "externals.$cur" -mtime +1 \
+      -exec rm -rf {} + 2>/dev/null
+  fi
+  find "$d/_diag" -type f -mtime +7 -delete 2>/dev/null
+done
+
+if [ "$(used)" -ge "$DISK_WARN_PCT" ]; then
+  for d in "${runners[@]}"; do
+    if busy "$d"; then echo "  ${d##*/}: mid-job, caches left alone"; continue; fi
+    scrub "$d" .pnpm-store .cache .npm/_cacache _work/_tool
+  done
 fi
 
-if [ "$(used "$RUNNER_DIR")" -ge "$DISK_CRIT_PCT" ]; then
-  # Past this point a warm cache is worth less than a working runner.
-  echo "::warning::disk still $(used "$RUNNER_DIR")% -- dropping every unused image and volume"
-  docker system prune -af --volumes >/dev/null 2>&1 || true
-  # Orphaned work directories from runners that died mid-job.
-  find "$RUNNER_DIR/_work" -maxdepth 1 -mindepth 1 -type d -mtime +1 \
-    -exec rm -rf {} + 2>/dev/null || true
+if [ "$(used)" -ge "$DISK_CRIT_PCT" ]; then
+  for d in "${runners[@]}"; do
+    busy "$d" && continue
+    empty "$d" _work
+    scrub "$d" .local
+  done
 fi
 
-after=$(used "$RUNNER_DIR")
-echo "$(date -u +%FT%TZ) disk ${after}% after (reclaimed $((before - after)) points)"
+# None installed today. If container jobs ever run here, this is what they need.
+if command -v docker >/dev/null 2>&1; then
+  docker container prune -f >/dev/null 2>&1 || true
+  docker builder prune -f >/dev/null 2>&1 || true
+  if [ "$(used)" -ge "$DISK_WARN_PCT" ]; then
+    docker image prune -af --filter "until=24h" >/dev/null 2>&1 || true
+  fi
+fi
 
-# Loud, because the next thing that happens is jobs failing for unrelated-looking
-# reasons. Alerting on this is the difference between fixing it on a Tuesday and
-# debugging it on a Friday.
+after=$(used)
+echo "$(date -u +%FT%TZ) disk ${after}% after"
 if [ "$after" -ge "$DISK_CRIT_PCT" ]; then
-  echo "::error::disk is ${after}% AFTER a full prune. This runner needs more disk or fewer container jobs."
+  echo "disk still ${after}% after cleaning every idle runner -- something other than the runners is using it: du -xsh /* | sort -rh | head" >&2
   exit 1
 fi
