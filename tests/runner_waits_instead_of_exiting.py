@@ -166,6 +166,51 @@ check("when even the status file cannot be written, it keeps waiting",
       rc == KILLED and len(sl) == BUDGET,
       f"rc={rc} sleeps={len(sl)} -- a failed write ended the loop")
 
+
+# --- and it comes first -----------------------------------------------------
+# Waiting is only worth anything if nothing before it can fail for the same
+# reason. Minting the App token needs the network, and it used to sit one line
+# above the wait -- so a VM that booted before the office router died at the
+# mint, never reaching the wait. Drive the real run-ephemeral.sh with every
+# step stubbed to log its name, and read the order back.
+EPHEMERAL = ROOT / "runners/run-ephemeral.sh"
+LOG_STEP = '#!/usr/bin/env bash\necho {name} >> "$LOG"\n'
+
+
+def order_of_steps() -> list[str]:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        rdir, stubs, log = tmp / "actions-runner-3", tmp / "stubs", tmp / "log"
+        for p in (rdir, stubs):
+            p.mkdir()
+        log.touch()
+        for name in ("wait-until-ready", "config", "run"):
+            script = rdir / (name + ".sh")
+            script.write_text(LOG_STEP.format(name=name))
+            script.chmod(0o755)
+        (rdir / "app-token.py").write_text(
+            'import os\nopen(os.environ["LOG"], "a").write("token\\n")\nprint("ghs_test")\n')
+        (stubs / "curl").write_text(
+            '#!/usr/bin/env bash\necho curl >> "$LOG"\necho \'{"token": "reg"}\'\n')
+        (stubs / "curl").chmod(0o755)
+        p = subprocess.run(
+            ["bash", str(EPHEMERAL)],
+            env={**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}",
+                 "LOG": str(log), "RUNNER_ORG": "acme", "RUNNER_GROUP": "private",
+                 "RUNNER_DIR": str(rdir), "APP_ID": "1",
+                 "APP_PRIVATE_KEY_PATH": "/dev/null", "GH_TOKEN": ""},
+            capture_output=True, text=True, timeout=60)
+        steps = log.read_text().split()
+        if p.returncode != 0:
+            steps.append(f"exit={p.returncode}: {(p.stdout + p.stderr)[-200:]}")
+        return steps
+
+
+steps = order_of_steps()
+check("the wait comes before the token, the registration and the job",
+      steps == ["wait-until-ready", "token", "curl", "config", "run"],
+      f"order={steps}")
+
 if FAILURES:
     print(f"\nFAIL: {len(FAILURES)}: {', '.join(FAILURES)}")
     sys.exit(1)

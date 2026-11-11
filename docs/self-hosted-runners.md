@@ -175,11 +175,13 @@ every runner exited twenty times in five minutes, and all ten stayed dead —
 the fleet had been off for eight days by then. Two things now stand between a
 bad moment and a dead fleet:
 
-- **`wait-until-ready.sh`** — before registering, a runner checks disk,
-  network and throughput, and *waits* (5 s doubling to 300 s) until all three
-  pass. It never exits, so nothing counts toward the limit, and it rejoins on
-  its own. A power cut that brings the VM up before the office network is
-  exactly this case. Why it is waiting, readable without sudo:
+- **`wait-until-ready.sh`** — first thing, before the App token is minted and
+  before registering, a runner checks disk, network and throughput, and *waits*
+  (5 s doubling to 300 s) until all three pass. It never exits, so nothing
+  counts toward the limit, and it rejoins on its own. A power cut that brings
+  the VM up before the office network is exactly this case — and the reason it
+  runs before the token: minting one needs the network, and a failed mint exits
+  like any other failure. Why it is waiting, readable without sudo:
   `cat /opt/actions-runner-*/_diag/not-ready`
 - **`actions-runner-revive.timer`** — every 15 minutes, any runner in the
   *failed* state gets one more round. That is for the failures we have not met

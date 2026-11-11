@@ -32,6 +32,24 @@ set -euo pipefail
 : "${APP_PRIVATE_KEY_PATH:=}"
 : "${GH_TOKEN:=}"
 
+# FIRST: before the token, before registration -- and wait, do not exit.
+#
+# Before registration, because a runner that cannot fetch at a usable rate
+# accepts jobs and fails them as though the repository were at fault -- which
+# is exactly what happened on 2026-10-06, for a morning, across every runner.
+# Unregistered, the job queues instead, and a queue is something people see.
+#
+# Before the token, because minting it is the first thing here that needs the
+# network. After a power cut the VM can boot before the office router does, and
+# a mint that fails ends this script exactly the way a refusal used to.
+#
+# Wait, do not exit. This used to be `check-throughput.sh || exit 1`, and every
+# exit counted toward the unit's StartLimitBurst: twenty in five minutes and
+# systemd stopped the runner for good. wait-until-ready.sh runs the same
+# throughput check, plus disk and network, and does not return until all three
+# pass. However long that takes, the hour-long token below is minted after it.
+"${RUNNER_DIR}/wait-until-ready.sh"
+
 if [ -n "$APP_ID" ] && [ -n "$APP_PRIVATE_KEY_PATH" ]; then
   GH_TOKEN=$(APP_ID="$APP_ID" APP_PRIVATE_KEY_PATH="$APP_PRIVATE_KEY_PATH" \
              RUNNER_ORG="$RUNNER_ORG" python3 "${RUNNER_DIR}/app-token.py")
@@ -43,20 +61,6 @@ else
 fi
 
 cd "$RUNNER_DIR"
-
-# BEFORE registration, not after. A runner that cannot fetch at a usable rate
-# accepts jobs and fails them as though the repository were at fault -- which
-# is exactly what happened on 2026-10-06, for a morning, across every runner.
-# Unregistered, the job queues instead, and a queue is something people see.
-#
-# systemd restarts us, so a link that recovers brings the runner back on its
-# own. Refusing is a pause, not a decommission.
-# WAIT, do not exit. This used to be `check-throughput.sh || exit 1`, and each
-# exit counted toward the unit's StartLimitBurst: twenty refusals in five
-# minutes and systemd stopped the runner for good. wait-until-ready.sh runs the
-# same throughput check, plus disk and network, and simply does not return
-# until all three pass -- so a refusal is the pause it was always meant to be.
-"${RUNNER_DIR}/wait-until-ready.sh"
 
 # A runner killed mid-job -- OOM, power cut, `systemctl stop` -- leaves .runner
 # behind, and config.sh then refuses with "Cannot configure the runner because
