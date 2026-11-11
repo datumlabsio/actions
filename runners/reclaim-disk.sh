@@ -19,6 +19,14 @@
 # NEVER UNDER A RUNNING JOB. A runner with a Runner.Worker process is mid-job;
 # its caches and work tree are left alone and it is picked up next hour.
 #
+# NOTHING HERE FOLLOWS A LINK. This runs as root, deleting inside directories
+# that every job can write. A job -- or a compromised package it installs --
+# can leave `_work` as a symlink to `/`, fill the disk to reach the critical
+# tier, and `rm -rf "$d/_work/"*` would then empty the machine as root. So a
+# path is removed only if no part of it below the runner's directory is a
+# symlink, and a planted link is reported, never obeyed. The unit's sandbox
+# (read-only outside /opt) is the second wall, not the first.
+#
 # TIERS. A warm cache saves real time on a slow uplink, until the disk is the
 # problem:
 #   always            runner versions no longer in use -- older than a day, so
@@ -43,6 +51,36 @@ used() { df -P "$RUNNER_ROOT" 2>/dev/null | awk 'NR == 2 { sub("%", "", $5); pri
 # The worker exists only while a job runs, as $dir/bin/Runner.Worker. The `/`
 # after the directory keeps actions-runner-1 from matching actions-runner-10.
 busy() { pgrep -f "^$1/bin[^/ ]*/Runner\.Worker" >/dev/null 2>&1; }
+
+# no_links DIR REL: true when no component of DIR/REL is a symlink. Split with
+# read, not an unquoted expansion, so nothing in REL can glob.
+no_links() {
+  local p=$1 part parts
+  IFS=/ read -r -a parts <<< "$2"
+  for part in "${parts[@]}"; do
+    [ -n "$part" ] || continue
+    p="$p/$part"
+    if [ -L "$p" ]; then
+      echo "  ${1##*/}: ${p#"$1"/} is a symlink -- not followed, not removed" >&2
+      return 1
+    fi
+  done
+}
+
+# scrub DIR REL...: remove each DIR/REL that no_links clears.
+scrub() {
+  local d=$1 rel
+  shift
+  for rel in "$@"; do
+    no_links "$d" "$rel" && rm -rf -- "${d:?}/$rel"
+  done
+}
+
+# empty DIR REL: remove what is inside DIR/REL, keeping REL itself.
+empty() {
+  no_links "$1" "$2" && [ -d "$1/$2" ] || return 0
+  find "$1/$2" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+}
 
 runners=()
 for d in "$RUNNER_ROOT"/actions-runner-*/; do
@@ -69,14 +107,15 @@ done
 if [ "$(used)" -ge "$DISK_WARN_PCT" ]; then
   for d in "${runners[@]}"; do
     if busy "$d"; then echo "  ${d##*/}: mid-job, caches left alone"; continue; fi
-    rm -rf "$d/.pnpm-store" "$d/.cache" "$d/.npm/_cacache" "$d/_work/_tool"
+    scrub "$d" .pnpm-store .cache .npm/_cacache _work/_tool
   done
 fi
 
 if [ "$(used)" -ge "$DISK_CRIT_PCT" ]; then
   for d in "${runners[@]}"; do
     busy "$d" && continue
-    rm -rf "$d/_work/"* "$d/.local"
+    empty "$d" _work
+    scrub "$d" .local
   done
 fi
 

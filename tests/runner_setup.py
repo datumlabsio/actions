@@ -87,6 +87,15 @@ check("reclaim finds every runner by directory, not from RUNNER_DIR",
       "actions-runner-*" in disk and "RUNNER_DIR" not in disk,
       "the env file still names the old single-runner directory; reading it is "
       "how the previous version cleaned nothing for six weeks")
+# The script refuses to follow links -- tests/reclaim_disk.py plants them and
+# watches. This is the second wall: root deleting in job-writable directories,
+# with everything outside /opt read-only to it should the first ever give.
+reclaim_unit = code_only((R / "reclaim-disk.service").read_text())
+check("reclaim runs as root in a sandbox where only /opt can be written",
+      re.search(r"^ProtectSystem=strict$", reclaim_unit, re.M) is not None
+      and re.search(r"^ReadWritePaths=/opt$", reclaim_unit, re.M) is not None,
+      "it deletes inside directories every job can write; one followed link "
+      "outside /opt must hit a read-only filesystem, not the machine")
 
 # --- a runner that is not ready waits; it does not exit -------------------
 check("run-ephemeral.sh waits for readiness instead of exiting",

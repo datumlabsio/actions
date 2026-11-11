@@ -5,3 +5,11 @@ Description=Reclaim runner disk
 Type=oneshot
 EnvironmentFile=/etc/actions-runner.env
 ExecStart=/opt/actions-runner/reclaim-disk.sh
+# Root, deleting inside directories that every job can write. reclaim-disk.sh
+# follows no symlink; if that ever gives, everything outside /opt is read-only
+# here, so a planted link reaches the runners and not the machine.
+ProtectSystem=strict
+ReadWritePaths=/opt
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true

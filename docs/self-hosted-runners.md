@@ -242,11 +242,19 @@ the old one) and escalates:
 **Never anything under a running job** — a runner with a `Runner.Worker`
 process is skipped and picked up next hour.
 
+**Never through a symlink.** It runs as root, deleting inside directories every
+job can write. A job that leaves `_work` as a link to `/` and fills the disk
+would otherwise have root empty the machine. A path is removed only if nothing
+in it below the runner's directory is a link, and a planted link is logged, not
+obeyed. `reclaim-disk.service` is the second wall: everything outside `/opt` is
+read-only to it.
+
 If the disk is still over 85% afterwards it exits 1, and that still reaches
 nobody directly: it runs under systemd, where nothing reads its output. What
 reaches a person is the chain after it — a runner short of disk waits in
 `wait-until-ready.sh` instead of registering, `runner-watch` sees it offline,
-and that is the Slack alert.
+and that is the Slack alert. `runner-still-offline`, in the `.github`
+repository, repeats it every day until the runners are back.
 
 This is the most common way a self-hosted runner dies. It is a timer from day one, not a thing to add after the first outage.
 

@@ -191,6 +191,35 @@ rc, r, out, _ = run(50, 50, 50, tweak=odd_link)
 check("a symlink that does not end in a version is not guessed at",
       has(r, "actions-runner-1", "bin.2.338.0") and has(r, "actions-runner-1", "bin.2.337.0"))
 
+# --- planted links: root follows none of them -------------------------------
+# A job can write its own runner's directory, and this runs as root. Leave
+# `_work` as a link to `/`, fill the disk to the critical tier, and an
+# `rm -rf "$d/_work/"*` empties the machine. The victim here is a directory
+# outside the fake /opt, with a canary at every depth a cache path could reach.
+def planted(root: Path) -> None:
+    victim = root.parent / "victim"
+    for sub in ("", "_cacache", "_tool"):
+        (victim / sub).mkdir(parents=True, exist_ok=True)
+        (victim / sub / "canary").write_text("x")
+    d = root / "actions-runner-1"
+    for rel in ("_work", ".npm", ".pnpm-store"):   # the tree, a parent, a cache
+        shutil.rmtree(d / rel)
+        (d / rel).symlink_to(victim)
+    # A link INSIDE a real work tree: removed as a link, its target left alone.
+    (root / "actions-runner-2" / "_work" / "evil").symlink_to(victim)
+
+rc, r, out, _ = run(90, 88, 40, tweak=planted)
+victim = r.parent / "victim"
+check("critical, with links planted: nothing outside the runners is touched",
+      all((victim / sub / "canary").exists() for sub in ("", "_cacache", "_tool")),
+      f"victim now holds {sorted(str(p.relative_to(victim)) for p in victim.rglob('*'))}")
+check("a planted link is reported, not obeyed", "is a symlink" in out, out[-300:])
+check("a link inside a real work tree is removed as a link",
+      not os.path.lexists(r / "actions-runner-2" / "_work" / "evil"))
+check("the runners without links are still cleaned",
+      not has(r, "actions-runner-2", "_work/polaris") and not has(r, "actions-runner-1", ".cache"),
+      out[-300:])
+
 # --- docker: only if it exists ---------------------------------------------
 rc, r, out, calls = run(50, 50, 50)
 check("no docker on the box: no docker anything, and still exits 0", rc == 0 and calls == "")
