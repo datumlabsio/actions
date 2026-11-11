@@ -60,6 +60,13 @@ on:
       any:
         description: "'true' when at least one of the folders changed."
         value: ${{ jobs.detect.outputs.any }}
+      changed-directly:
+        description: >-
+          Folders whose OWN files changed, ignoring run-all-on. Almost every
+          job should use `changed`, not this. Use it only for a job that a
+          shared-root change provably cannot break, and say in the caller why
+          it cannot — the default has to stay "run it".
+        value: ${{ jobs.detect.outputs.changed-directly }}
 
 permissions:
   contents: read
@@ -70,6 +77,7 @@ jobs:
     outputs:
       changed: ${{ steps.detect.outputs.changed }}
       any: ${{ steps.detect.outputs.any }}
+      changed-directly: ${{ steps.detect.outputs.changed-directly }}
     steps:
       - name: Check out
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -97,6 +105,7 @@ jobs:
              || ! git cat-file -e "$base" 2>/dev/null; then
             echo "::notice::No usable base commit; treating every folder as changed."
             changed="$PATHS"
+            direct="$PATHS"
           else
             files=$(git diff --name-only "$base" HEAD)
 
@@ -110,27 +119,35 @@ jobs:
               fi
             done
 
+            # Which folders were touched for their own sake. Computed even
+            # when run-all fires, because that is exactly when a caller needs
+            # to tell the two apart.
+            direct=""
+            for folder in $PATHS; do
+              if printf '%s\n' "$files" | grep -q "^${folder}/"; then
+                direct="$direct $folder"
+              fi
+            done
+            direct="$(echo "$direct" | xargs || true)"
+
             if [ -n "$trigger" ]; then
               echo "::notice::${trigger} changed, which affects every component; treating every folder as changed."
               changed="$PATHS"
-              echo "changed=$(echo "$changed" | xargs)" >> "$GITHUB_OUTPUT"
-              echo "any=true" >> "$GITHUB_OUTPUT"
+              {
+                echo "changed=$(echo "$changed" | xargs)"
+                echo "changed-directly=$direct"
+                echo "any=true"
+              } >> "$GITHUB_OUTPUT"
               exit 0
             fi
 
-            changed=""
-            for folder in $PATHS; do
-              if printf '%s\n' "$files" | grep -q "^${folder}/"; then
-                changed="$changed $folder"
-              fi
-            done
-            changed="$(echo "$changed" | xargs || true)"
+            changed="$direct"
           fi
 
-          echo "changed=$changed" >> "$GITHUB_OUTPUT"
-          if [ -n "$changed" ]; then
-            echo "any=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "any=false" >> "$GITHUB_OUTPUT"
-          fi
+          {
+            echo "changed=$changed"
+            echo "changed-directly=$direct"
+            if [ -n "$changed" ]; then echo "any=true"; else echo "any=false"; fi
+          } >> "$GITHUB_OUTPUT"
           echo "Changed: ${changed:-none}"
+          echo "Changed directly: ${direct:-none}"
