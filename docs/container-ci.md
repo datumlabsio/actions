@@ -15,7 +15,7 @@ jobs:
 
 Not a step after the scan — a *job*. A step can be reached by a workflow edit that moves it above the scan; a job dependency cannot be satisfied by a scan that failed. Scanning after publishing tells you what you have already shipped.
 
-The scanned image is the built image, not a rebuild. Scanning something you rebuilt proves nothing about what ships.
+**The pushed image is the scanned image** — the same bytes, not a rebuild. `build-scan` builds each platform once, to an OCI archive; the SBOM and the scan read that archive; `publish` pushes it with `skopeo` and builds nothing. On the way it checks every blob's sha256 and size, refuses if the platforms it holds are not exactly the ones asked for, and after each push asks the registry for what it now holds and compares digests. `publish` used to rebuild the image and push the rebuild: a second build nothing had scanned, and half of every release's minutes.
 
 ## Why GHCR
 
@@ -46,8 +46,9 @@ Set `gate-on: CRITICAL` once the real number is known. Same phase-in as §11 cov
 | `registry` | `ghcr.io` | anything else: image goes to `<registry>/<image-name>` via Workload Identity; caller grants `id-token: write` |
 | `workload-identity-provider` | *(empty)* | required unless `ghcr.io`; pass a variable, never a literal |
 | `service-account` | *(empty)* | required unless `ghcr.io` |
-| `platforms` | *(empty)* | e.g. `linux/amd64,linux/arm64`. `build-scan` builds, SBOMs and scans **every** platform listed (a non-native one under QEMU), and `gate-on` applies to each, before `publish` pushes them; see [`platforms`](#platforms) |
+| `platforms` | *(empty)* | e.g. `linux/amd64,linux/arm64`. Each architecture builds **natively**, arm64 on GitHub's `ubuntu-24.04-arm`; `build-scan` SBOMs and scans every platform, and `gate-on` applies to each, before `publish` pushes them; see [`platforms`](#platforms) |
 | `latest` | `true` | also move `latest` to this build, pushed after the SHA and version tags. Set `false` for a registry with tag immutability (Artifact Registry), which refuses to move it |
+| `also-registry` | *(empty)* | a second registry, reached by Workload Identity, that gets **the same scanned image** under the SHA and version, never `latest`. One build for both; see [`also-registry`](#also-registry) |
 
 `publish` defaults to false deliberately. A pull request from a fork must not be able to push an image.
 
@@ -75,13 +76,29 @@ with:
   platforms: linux/amd64,linux/arm64
 ```
 
-`publish` builds every listed platform with buildx and pushes them as one multi-arch image. So `build-scan` builds every one of them first, loads each under its own tag (`ci-candidate:<sha>-linux-arm64`), writes an SBOM per platform (`sbom-linux-arm64.spdx.json`, all in the one `sbom-<sha>` artifact), and runs Trivy on each. With `gate-on`, one platform over the line fails the job, and publish never starts. The run summary lists the platforms that were scanned.
+`build-scan` runs **one leg per architecture, each on a runner of that architecture**: `build-scan` on `ubuntu-latest` for amd64 (and, under QEMU, anything GitHub has no runner for), `build-scan (arm64)` on `ubuntu-24.04-arm` for arm64. Each leg builds its platforms to OCI archives, writes an SBOM per platform (`sbom-linux-arm64.spdx.json`; the arm64 leg's go in `sbom-<sha>-arm64`), and runs Trivy on each. With `gate-on`, one platform over the line fails its leg, and publish never starts. `publish` joins the legs' archives into one multi-arch image and pushes it.
 
-Before #113 was fixed, only the runner's native amd64 build was scanned, and an arm64 half reached the registry having passed no scan.
+Before #113 was fixed, only the runner's native amd64 build was scanned, and an arm64 half reached the registry having passed no scan. The arm64 half used to be built under QEMU on an amd64 runner — about 15 minutes an image against 3 natively — and then built a second time in `publish`. On a polaris release of ten images that was most of the Actions bill. GitHub has offered arm64 runners to private repositories since January 2026; they count against the same included minutes.
 
-**The cost is time.** A platform the runner is not (arm64 on `ubuntu-latest`) builds under QEMU, which is several times slower than native, and it now builds twice: once here to be scanned, once in `publish` to be pushed, as the native build always has. Leave `platforms` empty unless something actually runs the other architecture.
+Without `platforms`: one native linux/amd64 build, one `sbom.spdx.json`, one scan, pushed as a plain single-platform manifest, as before — now an OCI manifest rather than Docker's own format, which every registry and runtime we pull from reads.
 
-Without `platforms`, nothing changes: one native `docker build`, one `sbom.spdx.json`, one scan.
+### `also-registry`
+
+```yaml
+permissions:
+  contents: read
+  packages: write   # GHCR
+  id-token: write   # Workload Identity, for also-registry
+with:
+  platforms: linux/amd64,linux/arm64
+  also-registry: ${{ vars.CHART_REGISTRY }}
+  workload-identity-provider: ${{ vars.GCP_WIF_PROVIDER }}
+  service-account: ${{ vars.GCP_PUBLISHER_SA }}
+```
+
+For an image that has to be in two registries — GHCR for Proxmox and Artifact Registry for installs, in polaris's case. It used to take two calls, so two complete builds and scans of the same sources; now one build is scanned once and pushed to both. The second registry gets the SHA and version tags and never `latest`, because it is there for a registry with tag immutability. Empty pushes to `registry` only.
+
+One job pushes to both, so a failure on the second registry can leave the tags already pushed to the first. They are the scanned image either way; re-run the failed job and it completes the second.
 
 ## The hadolint config
 
@@ -99,6 +116,8 @@ I wrote the capitalised form from memory and it would have 404'd on the first ru
 
 ## Verified
 
-`self-test` runs the workflow against `tests/fixtures/container-ok` — which builds for real, from a base pinned by a **resolvable** digest, because a fixture that cannot build proves nothing about a workflow whose job is building. It runs it a second time with `platforms: linux/amd64,linux/arm64`, so the multi-platform path (QEMU, a build, SBOM and scan per platform) is exercised on every pull request too.
+`self-test` runs the workflow against `tests/fixtures/container-ok` — which builds for real, from a base pinned by a **resolvable** digest, because a fixture that cannot build proves nothing about a workflow whose job is building. It runs it a second time with `platforms: linux/amd64,linux/arm64`, so the multi-platform path (a native arm64 leg, a build, SBOM and scan per platform) is exercised on every pull request too.
+
+`publish` never pushes anywhere real from `self-test` — a pull request from a fork must never be able to — so `container-publish-end-to-end` runs its own `Build`, `Join` and `Push` steps, cut out of the workflow file, against a registry that lives only inside that job. It asserts the registry holds exactly the scanned manifests under the right tags, that the second registry never gets `latest`, that one platform is pushed as a plain manifest, and that one changed byte in a scanned layer, or a platform whose archive never arrived, stops publish before it pushes. `tests/merge_oci_unit.py` runs 26 further cases against the shipped copy of the merge.
 
 And directly against `tests/fixtures/container-bad`, which must be refused: `:latest`, unpinned apt packages, no cache cleanup, `ADD` from a URL, and a shell-form `CMD`.
