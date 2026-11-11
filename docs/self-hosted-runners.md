@@ -105,9 +105,10 @@ If this machine is compromised, the worst that credential does is register and r
 
 `GH_TOKEN` still works as a fallback while the App is being created, and warns every run. Temporary credentials are the ones that stay.
 
-**4. Copy in the scripts, units and the egress ruleset** from `runners/` in this repository, then:
+**4. Copy in the scripts, units and the egress ruleset** from `runners/` in this repository. The runner's own scripts go in `/opt/actions-runner`, owned by `runner`. The two that run as **root** go where only root can write: a root script in a directory the runner user owns is a root shell for anything that runs as that user.
 
 ```bash
+sudo install -o root -g root -m 0755 runners/reclaim-disk.sh runners/revive-runners.sh /usr/local/sbin/
 sudo systemctl enable --now reclaim-disk.timer actions-runner-revive.timer
 ```
 

@@ -4,4 +4,5 @@ Description=Give failed GitHub Actions runners another chance
 
 [Service]
 Type=oneshot
-ExecStart=/opt/actions-runner/revive-runners.sh
+# Root-owned path, for the reason in reclaim-disk.service.
+ExecStart=/usr/local/sbin/revive-runners.sh

@@ -90,6 +90,13 @@ check("reclaim finds every runner by directory, not from RUNNER_DIR",
 # The script refuses to follow links -- tests/reclaim_disk.py plants them and
 # watches. This is the second wall: root deleting in job-writable directories,
 # with everything outside /opt read-only to it should the first ever give.
+for name in ("reclaim-disk.service", "actions-runner-revive.service"):
+    u = code_only((R / name).read_text())
+    exe = re.search(r"^ExecStart=(\S+)", u, re.M)
+    check(f"{name} runs as root a script only root can write",
+          exe is not None and "User=" not in u and not exe.group(1).startswith("/opt/"),
+          "the runner user owns /opt/actions-runner; a root script there is a root "
+          "shell for anything that runs as that user")
 reclaim_unit = code_only((R / "reclaim-disk.service").read_text())
 check("reclaim runs as root in a sandbox where only /opt can be written",
       re.search(r"^ProtectSystem=strict$", reclaim_unit, re.M) is not None
