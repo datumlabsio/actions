@@ -63,11 +63,12 @@ It runs as **`datum-police`**, a GitHub App, and that choice is the rule rather 
 
 The App holds `contents: write`, `pull-requests: write` and `issues: write` (the last for the Dependency Dashboard) on the repos it is installed on, and nothing else.
 
-**The token is minted per run and revoked when the job ends**, so no long-lived credential sits in a secret store waiting to be forgotten. What is stored is the App id and its private key, as org secrets:
+**The token is minted per run and revoked when the job ends**, so no long-lived credential sits in a secret store waiting to be forgotten. What is stored is the App's Client ID and its private key, as org secrets:
 
 | Secret | |
 |---|---|
-| `DATUM_POLICE_APP_ID` | the App id |
+| `DATUM_POLICE_CLIENT_ID` | the App's Client ID |
+| `DATUM_POLICE_APP_ID` | the App's numeric ID — deprecated, read only by callers not yet moved to `client-id` |
 | `DATUM_POLICE_PRIVATE_KEY` | its private key |
 
 Org-level rather than per-repo, because the conformance audit and the `main` watcher will need the same identity from other repos, and rotating a key in one place beats three.

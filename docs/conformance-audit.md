@@ -8,7 +8,7 @@ jobs:
       repos: "datumlabsio/polaris datumlabsio/example"
       baseline-only-repos: "TheirOrg/their-repo"
     secrets:
-      app-id: ${{ secrets.DATUM_POLICE_APP_ID }}
+      client-id: ${{ secrets.DATUM_POLICE_CLIENT_ID }}
       private-key: ${{ secrets.DATUM_POLICE_PRIVATE_KEY }}
 ```
 
