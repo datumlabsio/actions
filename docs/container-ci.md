@@ -89,6 +89,7 @@ permissions:
   contents: read
   packages: write   # GHCR
   id-token: write   # Workload Identity, for also-registry
+  actions: write    # drop the scanned archives once published
 with:
   platforms: linux/amd64,linux/arm64
   also-registry: ${{ vars.CHART_REGISTRY }}
@@ -98,7 +99,9 @@ with:
 
 For an image that has to be in two registries — GHCR for Proxmox and Artifact Registry for installs, in polaris's case. It used to take two calls, so two complete builds and scans of the same sources; now one build is scanned once and pushed to both. The second registry gets the SHA and version tags and never `latest`, because it is there for a registry with tag immutability. Empty pushes to `registry` only.
 
-One job pushes to both, so a failure on the second registry can leave the tags already pushed to the first. They are the scanned image either way; re-run the failed job and it completes the second.
+**The primary registry goes first, on its own.** It is signed in to and pushed before the second registry is touched, so a second-registry failure — its Workload Identity sign-in included — leaves the primary fully tagged and fails the job. When these were two jobs, a registry-0 failure left GHCR, which Proxmox pulls, published; one job keeps that. Re-run the failed job to complete the second.
+
+**The scanned archives are kept three days and dropped as soon as publish succeeds.** They are gigabytes per release, and Actions storage is billed by the hour against the same budget as the minutes. Three days lets a failed publish be re-run across a weekend. Dropping them needs `actions: write` on the calling job; without it publish says so and the archives expire on their own.
 
 ## The hadolint config
 

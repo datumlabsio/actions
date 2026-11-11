@@ -403,7 +403,8 @@ jobs:
           echo "name=scanned-$(printf '%s' "$IMAGE" | tr -c 'A-Za-z0-9._-' '-')-${key}" >> "$GITHUB_OUTPUT"
 
       # After the scan, so only an archive that passed it is ever handed on.
-      # A day is enough: publish runs minutes later in the same workflow.
+      # Three days, so a failed publish can be re-run across a weekend; publish
+      # deletes it as soon as every push has succeeded.
       - name: Hand publish exactly what was scanned
         if: ${{ inputs.publish }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -411,7 +412,7 @@ jobs:
           name: ${{ steps.key.outputs.name }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/scanned/*.tar
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 3
           compression-level: 0
           overwrite: true
 
@@ -793,7 +794,11 @@ jobs:
             exit 1
           fi
 
-      - if: ${{ inputs.registry != 'ghcr.io' || inputs.also-registry != '' }}
+      # THE PRIMARY REGISTRY FIRST, signed in and pushed on its own. The second
+      # registry's sign-in comes after, so it cannot stop the primary: when
+      # they were two jobs, a registry-0 failure left GHCR -- what Proxmox
+      # pulls -- published, and one job must not take that away.
+      - if: ${{ inputs.registry != 'ghcr.io' }}
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ inputs.workload-identity-provider }}
@@ -802,32 +807,26 @@ jobs:
       # skopeo, not docker: docker can only push what it built or loaded, and
       # loading turns the archive into a different serialisation. skopeo copies
       # the archive's own manifests, configs and layers.
-      - name: Log in
+      - name: Log in to the primary registry
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          wif_login() {
-            gcloud auth print-access-token | skopeo login "${1%%/*}" -u oauth2accesstoken --password-stdin
-          }
           if [ "$REGISTRY" = ghcr.io ]; then
             printf '%s' "$GH_TOKEN" | skopeo login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           else
-            wif_login "$REGISTRY"
-          fi
-          if [ -n "${ALSO_REGISTRY:-}" ]; then
-            wif_login "$ALSO_REGISTRY"
+            gcloud auth print-access-token | skopeo login "${REGISTRY%%/*}" -u oauth2accesstoken --password-stdin
           fi
 
-      - name: Push what was scanned
+      - name: Push to the primary registry
         run: |
           set -euo pipefail
           src="oci:$RUNNER_TEMP/merged:push"
           top=$(awk '$1 == "index" || $1 == "manifest" { print $2 }' "$RUNNER_TEMP/merged.txt")
           if [ "$REGISTRY" = ghcr.io ]; then
-            primary="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${IMAGE}"
+            ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${IMAGE}"
           else
-            primary="${REGISTRY}/${IMAGE}"
+            ref="${REGISTRY}/${IMAGE}"
           fi
 
           # --preserve-digests: a registry that would have to rewrite a
@@ -846,21 +845,71 @@ jobs:
           }
 
           # The commit SHA first: it is the tag that can never be reused. Then
-          # the version a release is named by. `latest` last and only on the
-          # primary registry, so a refused `latest` cannot take the version
-          # down with it.
-          push "${primary}:${GITHUB_SHA}"
-          [ -z "${VERSION:-}" ] || push "${primary}:${VERSION}"
-          [ "${LATEST}" != true ] || push "${primary}:latest"
+          # the version a release is named by. `latest` last, so a refused
+          # `latest` cannot take the version down with it.
+          push "${ref}:${GITHUB_SHA}"
+          [ -z "${VERSION:-}" ] || push "${ref}:${VERSION}"
+          [ "${LATEST}" != true ] || push "${ref}:latest"
 
-          # The second registry gets the same bytes and never `latest`: it is
-          # for a registry with tag immutability, where a moving tag is refused.
-          if [ -n "${ALSO_REGISTRY:-}" ]; then
-            also="${ALSO_REGISTRY}/${IMAGE}"
-            push "${also}:${GITHUB_SHA}"
-            [ -z "${VERSION:-}" ] || push "${also}:${VERSION}"
-          fi
+      # The second registry, only now. Same bytes, never `latest`: it is for a
+      # registry with tag immutability, where a moving tag is refused.
+      - if: ${{ inputs.also-registry != '' && inputs.registry == 'ghcr.io' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.workload-identity-provider }}
+          service_account: ${{ inputs.service-account }}
 
+      - name: Log in to the second registry
+        if: ${{ inputs.also-registry != '' }}
+        run: |
+          set -euo pipefail
+          gcloud auth print-access-token | skopeo login "${ALSO_REGISTRY%%/*}" -u oauth2accesstoken --password-stdin
+
+      - name: Push to the second registry
+        if: ${{ inputs.also-registry != '' }}
+        run: |
+          set -euo pipefail
+          src="oci:$RUNNER_TEMP/merged:push"
+          top=$(awk '$1 == "index" || $1 == "manifest" { print $2 }' "$RUNNER_TEMP/merged.txt")
+          ref="${ALSO_REGISTRY}/${IMAGE}"
+          push() {
+            skopeo copy --all --preserve-digests --retry-times 3 "$src" "docker://$1"
+            held="sha256:$(skopeo inspect --raw "docker://$1" | sha256sum | cut -d' ' -f1)"
+            if [ "$held" != "$top" ]; then
+              echo "::error::$1 now holds $held, not the scanned $top."
+              exit 1
+            fi
+            echo "Published $1 ($top)"
+            echo "| \`$1\` | \`$top\` |" >> "$RUNNER_TEMP/published.md"
+          }
+          push "${ref}:${GITHUB_SHA}"
+          [ -z "${VERSION:-}" ] || push "${ref}:${VERSION}"
+
+      # The archives are gigabytes, and Actions storage is billed by the hour
+      # against the same budget as the minutes this workflow saves. Kept three
+      # days, so a failed publish can be re-run across a weekend; dropped the
+      # moment every push has succeeded. Deleting needs `actions: write`. A
+      # caller that does not grant it is told, and the archives expire anyway.
+      - name: Drop the scanned archives
+        if: ${{ success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          for d in "$RUNNER_TEMP"/scanned/*/; do
+            name=$(basename "$d")
+            id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=${name}" \
+                   --jq '.artifacts[0].id // empty' 2>/dev/null)
+            if [ -z "$id" ] || ! gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" >/dev/null 2>&1; then
+              echo "::notice::Could not delete ${name}; it expires in 3 days. Grant this job actions: write to drop it as soon as it is published."
+              exit 0
+            fi
+            echo "Dropped ${name}"
+          done
+
+      - name: What publish did
+        if: always()
+        run: |
           {
             echo "### container-ci / publish"
             echo
@@ -868,9 +917,9 @@ jobs:
             echo
             echo "| Pushed | Digest |"
             echo "|---|---|"
-            cat "$RUNNER_TEMP/published.md"
+            cat "$RUNNER_TEMP/published.md" 2>/dev/null || echo "| nothing | |"
             echo
             echo '```'
-            cat "$RUNNER_TEMP/merged.txt"
+            cat "$RUNNER_TEMP/merged.txt" 2>/dev/null || echo "no merged image"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

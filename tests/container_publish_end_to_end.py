@@ -55,7 +55,9 @@ def step(job, name):
 
 BUILD = step("build-scan", "Build")
 JOIN = step("publish", "Join the scanned platforms, checking every byte")
-PUSH = step("publish", "Push what was scanned")
+PUSH_PRIMARY = step("publish", "Push to the primary registry")
+PUSH_ALSO = step("publish", "Push to the second registry")
+PUBLISH = WF["jobs"]["publish"]["steps"]
 
 
 def check(name, ok, detail=""):
@@ -165,10 +167,12 @@ with tempfile.TemporaryDirectory() as tmp:
                 "GITHUB_REPOSITORY_OWNER": "datumlabsio", "IMAGE": "selftest"}
         j = bash(JOIN, {**base, "PLATFORMS": "linux/amd64,linux/arm64"})
         check("Join accepts both scanned platforms", j.returncode == 0, j.stdout + j.stderr)
-        p = bash(PUSH, {**base, "REGISTRY": "localhost:5000/primary",
-                        "ALSO_REGISTRY": "localhost:5000/also",
-                        "VERSION": "v0.0.0-selftest", "LATEST": "true"})
-        check("Push publishes to both registries", p.returncode == 0, p.stdout + p.stderr)
+        two = {**base, "REGISTRY": "localhost:5000/primary", "ALSO_REGISTRY": "localhost:5000/also",
+               "VERSION": "v0.0.0-selftest", "LATEST": "true"}
+        p = bash(PUSH_PRIMARY, two)
+        a = bash(PUSH_ALSO, two)
+        check("Push publishes to both registries", p.returncode == 0 and a.returncode == 0,
+              p.stdout + p.stderr + a.stdout + a.stderr)
 
         for ref in ("localhost:5000/primary/selftest:" + SHA,
                     "localhost:5000/primary/selftest:v0.0.0-selftest",
@@ -196,8 +200,8 @@ with tempfile.TemporaryDirectory() as tmp:
         hand_on(single, {"amd64": amd})
         s_env = {**base, "RUNNER_TEMP": str(single), "PLATFORMS": ""}
         j = bash(JOIN, s_env)
-        p = bash(PUSH, {**s_env, "REGISTRY": "localhost:5000/single", "ALSO_REGISTRY": "",
-                        "VERSION": "", "LATEST": "false"})
+        p = bash(PUSH_PRIMARY, {**s_env, "REGISTRY": "localhost:5000/single", "ALSO_REGISTRY": "",
+                                "VERSION": "", "LATEST": "false"})
         body = raw(f"localhost:5000/single/selftest:{SHA}", conf)
         man = json.loads(body) if body else {}
         check("one platform is pushed as the scanned manifest itself, not an index",
@@ -206,6 +210,29 @@ with tempfile.TemporaryDirectory() as tmp:
               p.stdout + p.stderr)
         check("...with only the SHA tag when there is no version and no latest",
               raw("localhost:5000/single/selftest:latest", conf) is None)
+
+        # --- the second registry cannot take the first one down ---------------
+        # They used to be separate jobs, and a registry-0 failure left GHCR --
+        # what Proxmox pulls -- published. One job must keep that: the primary
+        # is pushed, and only then is the second registry touched.
+        iso = {**base, "REGISTRY": "localhost:5000/isolated", "ALSO_REGISTRY": "localhost:5001/nowhere",
+               "VERSION": "v0.0.0-isolated", "LATEST": "true"}
+        p = bash(PUSH_PRIMARY, iso)
+        a = bash(PUSH_ALSO, iso)
+        check("a second registry that cannot be reached fails its own step",
+              p.returncode == 0 and a.returncode != 0, p.stdout + p.stderr + a.stdout + a.stderr)
+        check("...after the primary already holds every tag",
+              all(raw(f"localhost:5000/isolated/selftest:{tag}", conf) is not None
+                  for tag in (SHA, "v0.0.0-isolated", "latest")))
+        names = [s.get("name") or s.get("uses", "") for s in PUBLISH]
+        ifs = [s.get("if", "") for s in PUBLISH]
+        auth = [i for i, s in enumerate(PUBLISH) if "google-github-actions/auth" in s.get("uses", "")]
+        order = [names.index("Push to the primary registry"), names.index("Log in to the second registry"),
+                 names.index("Push to the second registry")]
+        check("the second registry is signed in to only after the primary is pushed",
+              order == sorted(order) and len(auth) == 2 and "also-registry" not in ifs[auth[0]]
+              and auth[0] < order[0] < auth[1] < order[1],
+              f"step order {list(zip(names, ifs))}")
 
         # --- refused: a changed byte, and a missing platform ------------------
         bad = tmp / "arm-tampered" / "linux-arm64.tar"
