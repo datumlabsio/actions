@@ -21,7 +21,7 @@ name: scaffold-update
 #     scaffold-update:
 #       uses: datumlabsio/actions/.github/workflows/scaffold-update.yml@vX.Y.Z
 #       secrets:
-#         app-id: ${{ secrets.DATUM_POLICE_APP_ID }}
+#         client-id: ${{ secrets.DATUM_POLICE_CLIENT_ID }}
 #         private-key: ${{ secrets.DATUM_POLICE_PRIVATE_KEY }}
 #
 # It runs as the bot, never as a person (DES §7).
@@ -47,9 +47,17 @@ on:
         default: "9.17.2"
 
     secrets:
+      client-id:
+        description: >-
+          The bot's GitHub App Client ID (Iv23...). Takes precedence over app-id. DES §7: automation is attributable and is not a person.
+        required: false
       app-id:
-        description: "The bot's GitHub App id. DES §7: automation is attributable and is not a person."
-        required: true
+        description: >-
+          Deprecated: the App's numeric ID, used only when client-id is absent.
+          actions/create-github-app-token deprecated its app-id input in
+          favour of client-id; both reach the same JWT issuer, so callers can
+          move over at their own pace.
+        required: false
       private-key:
         description: "The bot's private key."
         required: true
@@ -64,7 +72,7 @@ jobs:
       - name: Are the App credentials present?
         id: creds
         env:
-          APP_ID: ${{ secrets.app-id }}
+          CLIENT_ID: ${{ secrets.client-id || secrets.app-id }}
           # A person asked for this run. The schedule did not.
           ASKED_FOR: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
@@ -78,7 +86,7 @@ jobs:
           # A manual run that reports success and does nothing answers "did the
           # update work?" with a green tick -- dl-assessment-platform sat unable
           # to receive template updates while a hand-triggered run said it was fine.
-          if [ -n "${APP_ID:-}" ]; then
+          if [ -n "${CLIENT_ID:-}" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
           elif [ "$ASKED_FOR" = "true" ]; then
             echo "::error::No App credentials in this repository, so NOTHING RAN and no pull request was opened."
@@ -94,7 +102,7 @@ jobs:
         if: steps.creds.outputs.present == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.app-id }}
+          client-id: ${{ secrets.client-id || secrets.app-id }}
           private-key: ${{ secrets.private-key }}
           # Without `owner`, the token is scoped to THIS repository only — so a
           # private template is invisible to it: the release lookup 404s and the

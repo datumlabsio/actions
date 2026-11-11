@@ -8,7 +8,7 @@ name: conformance-audit
 #     audit:
 #       uses: datumlabsio/actions/.github/workflows/conformance-audit.yml@v0.14.0
 #       secrets:
-#         app-id: ${{ secrets.DATUM_POLICE_APP_ID }}
+#         client-id: ${{ secrets.DATUM_POLICE_CLIENT_ID }}
 #         private-key: ${{ secrets.DATUM_POLICE_PRIVATE_KEY }}
 #
 # WHAT IT CAN AND CANNOT SEE, which matters more than the check list. It audits
@@ -56,9 +56,18 @@ on:
         default: true
 
     secrets:
+      client-id:
+        description: >-
+          Client ID (Iv23...) of the bot identity, datum-police, which needs
+          issues:write to file findings. Takes precedence over app-id.
+        required: false
       app-id:
-        description: "Bot identity — datum-police. Needs issues:write to file findings."
-        required: true
+        description: >-
+          Deprecated: the App's numeric ID, used only when client-id is absent.
+          actions/create-github-app-token deprecated its app-id input in
+          favour of client-id; both reach the same JWT issuer, so callers can
+          move over at their own pace.
+        required: false
       private-key:
         required: true
 
@@ -77,10 +86,10 @@ jobs:
       - name: Are the App credentials present?
         id: creds
         env:
-          APP_ID: ${{ secrets.app-id }}
+          CLIENT_ID: ${{ secrets.client-id || secrets.app-id }}
         run: |
           set -euo pipefail
-          if [ -z "${APP_ID:-}" ]; then
+          if [ -z "${CLIENT_ID:-}" ]; then
             echo "::notice::No App credentials, so nothing was audited. See B-06."
             echo "present=false" >> "$GITHUB_OUTPUT"
           else
@@ -92,7 +101,7 @@ jobs:
         if: steps.creds.outputs.present == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.app-id }}
+          client-id: ${{ secrets.client-id || secrets.app-id }}
           private-key: ${{ secrets.private-key }}
           owner: ${{ github.repository_owner }}
 

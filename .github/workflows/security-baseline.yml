@@ -109,8 +109,11 @@ on:
       # required secret would turn "we do not alert here" into a red build on
       # somebody else's pull request -- for a repository we cannot file against
       # anyway.
+      violation-client-id:
+        description: "Client ID (Iv23...) of the App that may only open issues in `violation-repo`."
+        required: false
       violation-app-id:
-        description: "App that may only open issues in `violation-repo`."
+        description: "Deprecated: the same App's numeric ID, used only when violation-client-id is absent."
         required: false
       violation-private-key:
         description: "Its private key. Absent means this repository does not file."
@@ -869,10 +872,10 @@ jobs:
       - name: Can this repository file at all?
         id: creds
         env:
-          APP_ID: ${{ secrets.violation-app-id }}
+          CLIENT_ID: ${{ secrets.violation-client-id || secrets.violation-app-id }}
         run: |
           set -euo pipefail
-          if [ -z "${APP_ID:-}" ]; then
+          if [ -z "${CLIENT_ID:-}" ]; then
             echo "::notice::No filing credentials here, so nothing was filed."
             echo "::notice::This is normal outside datumlabsio. The check still failed, which is the part that blocks."
             echo "present=false" >> "$GITHUB_OUTPUT"
@@ -885,7 +888,7 @@ jobs:
         if: steps.creds.outputs.present == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.violation-app-id }}
+          client-id: ${{ secrets.violation-client-id || secrets.violation-app-id }}
           private-key: ${{ secrets.violation-private-key }}
           owner: ${{ github.repository_owner }}
           # Scoped to the one repository it files into. The key is readable by

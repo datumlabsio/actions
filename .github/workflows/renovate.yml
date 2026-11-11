@@ -62,14 +62,21 @@ on:
         default: "info"
 
     secrets:
-      app-id:
+      client-id:
         description: >-
-          App ID of the bot identity. A GitHub App rather than a personal access
+          Client ID (Iv23...) of the bot identity. A GitHub App rather than a personal access
           token, because docs/bot-identities.md in datumlabsio/.github requires
           an identity of its own — "its own account or app, not a personal
           token" — and because an App's token is minted per run and expires,
           where a PAT sits in a secret store until somebody remembers it.
-        required: true
+        required: false
+      app-id:
+        description: >-
+          Deprecated: the App's numeric ID, used only when client-id is absent.
+          actions/create-github-app-token deprecated its app-id input in
+          favour of client-id; both reach the same JWT issuer, so callers can
+          move over at their own pace.
+        required: false
       private-key:
         description: "Private key for the same App. Never logged; consumed by the token step."
         required: true
@@ -112,12 +119,12 @@ jobs:
       - name: Are the App credentials present?
         id: creds
         env:
-          APP_ID: ${{ secrets.app-id }}
+          CLIENT_ID: ${{ secrets.client-id || secrets.app-id }}
         run: |
           set -euo pipefail
-          if [ -z "${APP_ID:-}" ]; then
+          if [ -z "${CLIENT_ID:-}" ]; then
             echo "::notice::No App credentials yet, so nothing was scanned."
-            echo "::notice::See B-06 — provision the bot identity, then set DATUM_POLICE_APP_ID and DATUM_POLICE_PRIVATE_KEY as org secrets."
+            echo "::notice::See B-06 — provision the bot identity, then set DATUM_POLICE_CLIENT_ID and DATUM_POLICE_PRIVATE_KEY as org secrets."
             echo "present=false" >> "$GITHUB_OUTPUT"
           else
             echo "present=true" >> "$GITHUB_OUTPUT"
@@ -132,7 +139,7 @@ jobs:
         if: steps.creds.outputs.present == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.app-id }}
+          client-id: ${{ secrets.client-id || secrets.app-id }}
           private-key: ${{ secrets.private-key }}
           owner: ${{ github.repository_owner }}
 
