@@ -70,9 +70,9 @@ def bash(script, env, cwd=None):
                           env={**os.environ, **env}, cwd=cwd, capture_output=True, text=True)
 
 
-def raw(ref, conf):
+def raw(ref, home):
     p = subprocess.run(["skopeo", "inspect", "--raw", f"docker://{ref}"],
-                       env={**os.environ, "CONTAINERS_REGISTRIES_CONF": conf},
+                       env={**os.environ, "HOME": home},
                        capture_output=True)
     return p.stdout if p.returncode == 0 else None
 
@@ -122,8 +122,17 @@ def tamper(src, dst):
 
 with tempfile.TemporaryDirectory() as tmp:
     tmp = Path(tmp)
-    conf = tmp / "registries.conf"
-    conf.write_text('[[registry]]\nlocation = "localhost:5000"\ninsecure = true\n')
+    # The test registry speaks plain HTTP. skopeo 1.13 ignores
+    # CONTAINERS_REGISTRIES_CONF -- the first version of this test set it, and
+    # every push went out over HTTPS and failed -- but it reads
+    # $HOME/.config/containers/registries.conf. So Join, Push and the checks
+    # below run with HOME pointed here. Build keeps the real HOME: that is
+    # where setup-buildx-action left the builder that can export OCI.
+    home = tmp / "home"
+    (home / ".config" / "containers").mkdir(parents=True)
+    (home / ".config" / "containers" / "registries.conf").write_text(
+        '[[registry]]\nlocation = "localhost:5000"\ninsecure = true\n')
+    conf = str(home)
     subprocess.run(["docker", "rm", "-f", "e2e-registry"], capture_output=True)
     subprocess.run(["docker", "run", "-d", "--rm", "-p", "5000:5000", "--name", "e2e-registry",
                     REGISTRY_IMAGE], check=True, capture_output=True)
@@ -151,7 +160,7 @@ with tempfile.TemporaryDirectory() as tmp:
         # --- two platforms, two registries ------------------------------------
         pub = tmp / "pub"
         hand_on(pub, {"amd64": amd, "arm64": arm})
-        base = {"RUNNER_TEMP": str(pub), "CONTAINERS_REGISTRIES_CONF": str(conf),
+        base = {"RUNNER_TEMP": str(pub), "HOME": conf,
                 "GITHUB_STEP_SUMMARY": str(tmp / "summary.md"), "GITHUB_SHA": SHA,
                 "GITHUB_REPOSITORY_OWNER": "datumlabsio", "IMAGE": "selftest"}
         j = bash(JOIN, {**base, "PLATFORMS": "linux/amd64,linux/arm64"})
@@ -166,7 +175,7 @@ with tempfile.TemporaryDirectory() as tmp:
                     "localhost:5000/primary/selftest:latest",
                     "localhost:5000/also/selftest:" + SHA,
                     "localhost:5000/also/selftest:v0.0.0-selftest"):
-            body = raw(ref, str(conf))
+            body = raw(ref, conf)
             if body is None:
                 check(f"{ref} exists", False, "the registry does not hold it")
                 continue
@@ -176,9 +185,9 @@ with tempfile.TemporaryDirectory() as tmp:
             check(f"{ref} is exactly the two scanned manifests", held == scanned,
                   f"registry holds {held}, build-scan scanned {scanned}")
         check("the second registry never gets `latest`",
-              raw("localhost:5000/also/selftest:latest", str(conf)) is None)
+              raw("localhost:5000/also/selftest:latest", conf) is None)
         for digest in scanned:
-            body = raw(f"localhost:5000/primary/selftest@{digest}", str(conf))
+            body = raw(f"localhost:5000/primary/selftest@{digest}", conf)
             check(f"the registry's {scanned[digest]} manifest hashes to the scanned digest",
                   body is not None and "sha256:" + hashlib.sha256(body).hexdigest() == digest)
 
@@ -189,14 +198,14 @@ with tempfile.TemporaryDirectory() as tmp:
         j = bash(JOIN, s_env)
         p = bash(PUSH, {**s_env, "REGISTRY": "localhost:5000/single", "ALSO_REGISTRY": "",
                         "VERSION": "", "LATEST": "false"})
-        body = raw(f"localhost:5000/single/selftest:{SHA}", str(conf))
+        body = raw(f"localhost:5000/single/selftest:{SHA}", conf)
         man = json.loads(body) if body else {}
         check("one platform is pushed as the scanned manifest itself, not an index",
               j.returncode == 0 and p.returncode == 0 and "layers" in man
               and "sha256:" + hashlib.sha256(body).hexdigest() == scanned_digest(amd),
               p.stdout + p.stderr)
         check("...with only the SHA tag when there is no version and no latest",
-              raw("localhost:5000/single/selftest:latest", str(conf)) is None)
+              raw("localhost:5000/single/selftest:latest", conf) is None)
 
         # --- refused: a changed byte, and a missing platform ------------------
         bad = tmp / "arm-tampered" / "linux-arm64.tar"
