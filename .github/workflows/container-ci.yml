@@ -10,9 +10,10 @@ name: container-ci
 #         packages: write
 #
 # lint -> build -> SBOM -> scan -> publish, in that order, because the order IS
-# the control: the scan runs against the image that would be published, and
-# publish is a separate job that cannot start unless the scan job succeeded.
-# Scanning after publishing tells you what you have already shipped.
+# the control: the scan runs against the image that is published -- the same
+# archive, pushed by publish without a rebuild -- and publish is a separate job
+# that cannot start unless every scan succeeded. Scanning after publishing tells
+# you what you have already shipped.
 #
 # GHCR rather than ECR. Publishing needs no credentials at all — GITHUB_TOKEN is
 # already scoped to the registry — where ECR would put long-lived AWS keys in
@@ -101,8 +102,9 @@ on:
 
       publish:
         description: >-
-          Push to GHCR. Only ever true on the default branch — a pull request
-          from a fork must not be able to publish.
+          Push the scanned image to `registry` (and `also-registry`). Only ever
+          true on the default branch — a pull request from a fork must not be
+          able to publish.
         type: boolean
         default: false
 
@@ -112,8 +114,21 @@ on:
         default: "ghcr.io"
       workload-identity-provider: {type: string, default: ""}
       service-account: {type: string, default: ""}
+      also-registry:
+        description: >-
+          A second registry, reached by Workload Identity like `registry` can
+          be, that gets the same scanned image -- pushed, not rebuilt -- under
+          the commit SHA and the version. Never `latest`: it is for a registry
+          with tag immutability, where a moving tag is refused. Empty pushes to
+          `registry` only. The caller grants `id-token: write` for it.
+        type: string
+        default: ""
       platforms:
-        description: "e.g. linux/amd64,linux/arm64 via buildx. Empty: native build, as before."
+        description: >-
+          e.g. linux/amd64,linux/arm64. Each architecture is built on a runner
+          of its own (arm64 on ubuntu-24.04-arm), not under emulation; anything
+          GitHub has no runner for builds under QEMU on amd64. Empty: one
+          native linux/amd64 build, as before.
         type: string
         default: ""
       latest:
@@ -184,10 +199,27 @@ jobs:
           fi
           echo "Dockerfile is clean."
 
+  # ONE LEG PER ARCHITECTURE, EACH ON A RUNNER OF THAT ARCHITECTURE. The arm64
+  # half used to be built under QEMU on an amd64 runner: about 15 minutes an
+  # image where a native build takes 3, and on a release of ten images that was
+  # most of the bill. GitHub has offered arm64 runners to private repositories
+  # since January 2026. The amd64 leg keeps the job's old name, so a check that
+  # requires `build-scan` still finds it; the arm64 leg is `build-scan (arm64)`.
+  #
+  # THE IMAGE A LEG SCANS IS THE IMAGE PUBLISH PUSHES -- the same bytes, not a
+  # rebuild. Each platform is built once, to an OCI archive; the SBOM and the
+  # scan read that archive; publish pushes it and refuses if one digest does
+  # not match. publish used to build everything AGAIN and push the second
+  # build, which nothing had scanned, and that was half of every release's
+  # minutes too.
   build-scan:
     needs: lint
     if: ${{ always() && (needs.lint.result == 'success' || needs.lint.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.arch == 'arm64' && 'build-scan (arm64)' || 'build-scan' }}
+    strategy:
+      matrix:
+        arch: ${{ fromJSON(inputs.platforms == 'linux/arm64' && '["arm64"]' || (contains(inputs.platforms, 'linux/arm64') && '["amd64","arm64"]' || '["amd64"]')) }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     permissions:
       contents: read
     defaults:
@@ -200,20 +232,60 @@ jobs:
       GATE_ON: ${{ inputs.gate-on }}
       BUILD_ARGS: ${{ inputs.build-args }}
       PLATFORMS: ${{ inputs.platforms }}
+      ARCH: ${{ matrix.arch }}
+      # What makes this call's archive this call's: publish hashes the same
+      # values to find it. See "Which archive is ours".
+      IMAGE: ${{ inputs.image-name || github.event.repository.name }}
+      REGISTRY: ${{ inputs.registry }}
+      ALSO_REGISTRY: ${{ inputs.also-registry }}
+      WORKDIR: ${{ inputs.working-directory }}
     steps:
       - name: Check out
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      # The same two setup steps publish runs, at the same pins: a platform the
-      # runner is not (arm64 on ubuntu-latest) builds under QEMU here exactly as
-      # it will there. Skipped without `platforms`, so that path is unchanged.
-      - if: ${{ inputs.platforms != '' }}
+      # The arm64 leg builds linux/arm64 natively. The amd64 leg builds the
+      # rest: linux/amd64 natively, anything else (arm/v7, ...) under QEMU as
+      # before. Without `platforms`: one native linux/amd64 build, which is
+      # what `docker build` produced.
+      - name: Which platforms this leg builds
+        id: plan
+        run: |
+          set -euo pipefail
+          mine=()
+          if [ -z "${PLATFORMS:-}" ]; then
+            mine=(linux/amd64)
+          else
+            IFS=',' read -ra requested <<< "$PLATFORMS"
+            for p in "${requested[@]}"; do
+              p="$(tr -d '[:space:]' <<< "$p")"
+              [ -n "$p" ] || continue
+              case "$ARCH:$p" in
+                arm64:linux/arm64*) mine+=("$p") ;;
+                amd64:linux/arm64*) ;;
+                amd64:*) mine+=("$p") ;;
+              esac
+            done
+          fi
+          if [ "${#mine[@]}" -eq 0 ]; then
+            echo "::error::platforms is set to '$PLATFORMS', which names no platform for the $ARCH runner."
+            exit 1
+          fi
+          qemu=false
+          for p in "${mine[@]}"; do
+            case "$ARCH:$p" in amd64:linux/amd64|arm64:linux/arm64*) ;; *) qemu=true ;; esac
+          done
+          (IFS=,; echo "list=${mine[*]}") >> "$GITHUB_OUTPUT"
+          echo "qemu=$qemu" >> "$GITHUB_OUTPUT"
+          echo "This leg builds ${mine[*]} on $(uname -m)$( [ "$qemu" = true ] && echo ', some under QEMU' )."
+
+      - if: ${{ steps.plan.outputs.qemu == 'true' }}
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         env:
           RUNNER_TOOL_CACHE: ${{ runner.temp }}
 
-      - if: ${{ inputs.platforms != '' }}
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Every leg, not only with `platforms`: the docker-container builder is
+      # what can export an OCI archive, and the archive is what gets scanned.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         env:
           RUNNER_TOOL_CACHE: ${{ runner.temp }}
 
@@ -222,96 +294,88 @@ jobs:
           set -euo pipefail
           p="$CONFIG_DIR/container-tool-versions.txt"
           get() { grep "^$1=" "$p" | cut -d= -f2; }
+          # The runner's architecture, not the image's: the arm64 leg runs
+          # arm64 binaries.
+          case "$(uname -m)" in
+            x86_64)  trivy_arch=64bit; syft_arch=amd64 ;;
+            aarch64) trivy_arch=ARM64; syft_arch=arm64 ;;
+            *) echo "::error::No trivy or syft download is wired for $(uname -m)."; exit 1 ;;
+          esac
           mkdir -p "$RUNNER_TEMP/bin"
-          curl -sSL --fail "https://github.com/aquasecurity/trivy/releases/download/v$(get trivy)/trivy_$(get trivy)_Linux-64bit.tar.gz" \
+          curl -sSL --fail "https://github.com/aquasecurity/trivy/releases/download/v$(get trivy)/trivy_$(get trivy)_Linux-${trivy_arch}.tar.gz" \
             | tar xz -C "$RUNNER_TEMP/bin" trivy
-          curl -sSL --fail "https://github.com/anchore/syft/releases/download/v$(get syft)/syft_$(get syft)_linux_amd64.tar.gz" \
+          curl -sSL --fail "https://github.com/anchore/syft/releases/download/v$(get syft)/syft_$(get syft)_linux_${syft_arch}.tar.gz" \
             | tar xz -C "$RUNNER_TEMP/bin" syft
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/bin/trivy" --version | head -1
           "$RUNNER_TEMP/bin/syft" version | head -1
 
-      # Built locally and NOT pushed. The image the scan runs against has to be
-      # the image that would be published — scanning a rebuild proves nothing
-      # about what ships.
+      # Built once, to an OCI archive, and NOT pushed. Every step after this
+      # reads that archive -- unpacked for the SBOM and the scan, as-is for
+      # publish -- so the scanned image and the published one are the same
+      # bytes, and publish checks that they are.
       #
-      # EVERY PLATFORM publish will push, not just the runner's own. publish
-      # builds `platforms` with buildx and pushes them all; before this, only the
-      # native amd64 build was scanned here, so an arm64 half reached the
-      # registry having passed no scan and no gate (actions #113). Each platform
-      # is built and loaded under its own tag, and the steps below run on each.
-      # Without `platforms`: one native build under the one tag, as before.
+      # --provenance=false --sbom=false: the archive holds the image and
+      # nothing else. The SBOM is syft's, kept as an artifact below.
       - name: Build
+        env:
+          LIST: ${{ steps.plan.outputs.list }}
         run: |
           set -euo pipefail
           # One KEY=VALUE per line into --build-arg. An empty BUILD_ARGS yields
-          # an empty array and a command identical to the one before this input
-          # existed. `${a[@]+"${a[@]}"}` rather than a bare `"${a[@]}"` because
-          # `set -u` treats an empty array as unset on bash before 4.4.
+          # an empty array. `${a[@]+"${a[@]}"}` rather than a bare `"${a[@]}"`
+          # because `set -u` treats an empty array as unset before bash 4.4.
           build_args=()
           while IFS= read -r arg; do
             [ -n "$arg" ] || continue
             build_args+=(--build-arg "$arg")
           done <<< "${BUILD_ARGS:-}"
-          candidates="$RUNNER_TEMP/candidates.txt"
-          : > "$candidates"
-          if [ -z "${PLATFORMS:-}" ]; then
-            docker build -f "$DOCKERFILE" \
+          out="$RUNNER_TEMP/scanned"
+          mkdir -p "$out"
+          : > "$RUNNER_TEMP/candidates.txt"
+          IFS=',' read -ra mine <<< "$LIST"
+          for platform in "${mine[@]}"; do
+            safe="${platform//\//-}"
+            docker buildx build -f "$DOCKERFILE" --platform "$platform" \
               ${build_args[@]+"${build_args[@]}"} \
-              -t "ci-candidate:$GITHUB_SHA" .
-            echo "ci-candidate:$GITHUB_SHA" >> "$candidates"
-          else
-            # `--load` takes one platform at a time, hence the loop.
-            IFS=',' read -ra platforms <<< "$PLATFORMS"
-            for platform in "${platforms[@]}"; do
-              platform="$(tr -d '[:space:]' <<< "$platform")"
-              [ -n "$platform" ] || continue
-              tag="ci-candidate:$GITHUB_SHA-${platform//\//-}"
-              docker buildx build -f "$DOCKERFILE" --platform "$platform" \
-                ${build_args[@]+"${build_args[@]}"} \
-                --load -t "$tag" .
-              echo "$tag" >> "$candidates"
-            done
-            if [ ! -s "$candidates" ]; then
-              echo "::error::platforms is set to '$PLATFORMS', which names no platform."
-              exit 1
-            fi
-          fi
+              --provenance=false --sbom=false \
+              --output "type=oci,dest=$out/$safe.tar" .
+            mkdir -p "$RUNNER_TEMP/layouts/$safe"
+            tar -xf "$out/$safe.tar" -C "$RUNNER_TEMP/layouts/$safe"
+            echo "$safe" >> "$RUNNER_TEMP/candidates.txt"
+          done
 
-      # One SBOM per candidate. Without `platforms` it is sbom.spdx.json, as
-      # before; with it, sbom-<os>-<arch>.spdx.json each, in the same artifact.
+      # One SBOM per platform, read from the archive. Without `platforms` it is
+      # sbom.spdx.json, as before; with it, sbom-<os>-<arch>.spdx.json each.
       - name: SBOM
         if: ${{ inputs.sbom }}
         run: |
           set -euo pipefail
-          if [ -z "${PLATFORMS:-}" ]; then
-            syft "ci-candidate:$GITHUB_SHA" -o spdx-json > sbom.spdx.json
-          else
-            while IFS= read -r tag; do
-              syft "$tag" -o spdx-json > "sbom-${tag#"ci-candidate:$GITHUB_SHA-"}.spdx.json"
-            done < "$RUNNER_TEMP/candidates.txt"
-          fi
+          while IFS= read -r safe; do
+            if [ -z "${PLATFORMS:-}" ]; then f=sbom.spdx.json; else f="sbom-${safe}.spdx.json"; fi
+            syft "oci-dir:$RUNNER_TEMP/layouts/$safe" -o spdx-json > "$f"
+          done < "$RUNNER_TEMP/candidates.txt"
 
       - name: Keep the SBOM
         if: ${{ inputs.sbom }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: sbom-${{ github.sha }}
+          name: sbom-${{ github.sha }}${{ matrix.arch == 'arm64' && '-arm64' || '' }}
           path: ${{ inputs.working-directory }}/sbom*.spdx.json
           if-no-files-found: error
           retention-days: 30
 
-      # Every candidate is reported, and with gate-on every one is gated: one
+      # Every platform is reported, and with gate-on every one is gated: one
       # platform over the line fails the job, and publish never starts.
       - name: Scan
         run: |
           set -euo pipefail
           mapfile -t candidates < "$RUNNER_TEMP/candidates.txt"
-          for candidate in "${candidates[@]}"; do
+          for safe in "${candidates[@]}"; do
             if [ "${#candidates[@]}" -gt 1 ]; then
-              echo "=== $candidate"
+              echo "=== $safe"
             fi
-            trivy image --severity "$SEVERITY" --no-progress "$candidate"
+            trivy image --input "$RUNNER_TEMP/layouts/$safe" --severity "$SEVERITY" --no-progress
           done
 
           if [ -z "${GATE_ON:-}" ]; then
@@ -321,9 +385,35 @@ jobs:
             exit 0
           fi
           echo "Gating on: $GATE_ON"
-          for candidate in "${candidates[@]}"; do
-            trivy image --severity "$GATE_ON" --exit-code 1 --no-progress "$candidate"
+          for safe in "${candidates[@]}"; do
+            trivy image --input "$RUNNER_TEMP/layouts/$safe" --severity "$GATE_ON" --exit-code 1 --no-progress
           done
+
+      # Unique to this call. Artifact names are not unique on their own: one
+      # polaris release that calls this workflow twenty times carried twenty
+      # artifacts all named sbom-<sha>. Fetched by a name like that, publish
+      # could be handed another image's archive and push it under this name.
+      # build-scan and publish hash the same inputs, so they agree.
+      - name: Which archive is ours
+        id: key
+        if: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          key=$(printf '%s\n' "$IMAGE" "$REGISTRY" "$ALSO_REGISTRY" "$PLATFORMS" "$BUILD_ARGS" "$WORKDIR" "$DOCKERFILE" | sha256sum | cut -c1-16)
+          echo "name=scanned-$(printf '%s' "$IMAGE" | tr -c 'A-Za-z0-9._-' '-')-${key}" >> "$GITHUB_OUTPUT"
+
+      # After the scan, so only an archive that passed it is ever handed on.
+      # A day is enough: publish runs minutes later in the same workflow.
+      - name: Hand publish exactly what was scanned
+        if: ${{ inputs.publish }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.key.outputs.name }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/scanned/*.tar
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: true
 
       # A security gate that runs DEGRADED is the worst of the three states: it is
       # green, it did something, and what it did is not what the caller assumes.
@@ -331,7 +421,8 @@ jobs:
       - name: What this job actually did
         if: always()
         env:
-          LABEL: "container-ci / build-scan"
+          LABEL: "container-ci / build-scan${{ matrix.arch == 'arm64' && ' (arm64)' || '' }}"
+          LIST: ${{ steps.plan.outputs.list }}
         run: |
           set -euo pipefail
           deg="$RUNNER_TEMP/datum-degraded.txt"
@@ -348,108 +439,438 @@ jobs:
             else
               echo "| Ran | fully configured |"
             fi
-            # Which platforms the scan covered, so "every platform publish
-            # pushes was scanned" can be read off the run, not assumed.
-            if [ -n "${PLATFORMS:-}" ]; then
-              echo "| Scanned platforms | ${PLATFORMS} |"
-            fi
+            # Which platforms this leg scanned, and on what, so "every
+            # platform publish pushes was scanned" can be read off the run.
+            echo "| Scanned platforms | ${LIST:-none} on $(uname -m) |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ -n "$notes" ]; then
             echo "::warning::Ran degraded: ${notes}"
           fi
 
+  # Pushes what build-scan scanned and builds nothing. A separate job that
+  # `needs` the scan, rather than a step after it: a step can be reached by a
+  # workflow edit that moves it above the scan; a job dependency cannot be
+  # satisfied by a failing scan at all. With `platforms`, it needs every leg.
   publish:
     needs: build-scan
     if: ${{ inputs.publish && needs.build-scan.result == 'success' }}
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ${{ inputs.working-directory }}
     env:
-      DOCKERFILE: ${{ inputs.dockerfile }}
       IMAGE: ${{ inputs.image-name || github.event.repository.name }}
       VERSION: ${{ inputs.version }}
-      BUILD_ARGS: ${{ inputs.build-args }}
       REGISTRY: ${{ inputs.registry }}
-      PLATFORMS: ${{ inputs.platforms }}
+      ALSO_REGISTRY: ${{ inputs.also-registry }}
       LATEST: ${{ inputs.latest }}
+      PLATFORMS: ${{ inputs.platforms }}
+      BUILD_ARGS: ${{ inputs.build-args }}
+      WORKDIR: ${{ inputs.working-directory }}
+      DOCKERFILE: ${{ inputs.dockerfile }}
     steps:
-      - name: Check out
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Which archive is ours
+        id: key
+        run: |
+          set -euo pipefail
+          key=$(printf '%s\n' "$IMAGE" "$REGISTRY" "$ALSO_REGISTRY" "$PLATFORMS" "$BUILD_ARGS" "$WORKDIR" "$DOCKERFILE" | sha256sum | cut -c1-16)
+          echo "name=scanned-$(printf '%s' "$IMAGE" | tr -c 'A-Za-z0-9._-' '-')-${key}" >> "$GITHUB_OUTPUT"
 
-      - if: ${{ inputs.registry != 'ghcr.io' }}
+      - name: Fetch what build-scan scanned
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ${{ steps.key.outputs.name }}-*
+          path: ${{ runner.temp }}/scanned
+
+      # Joins the per-platform archives into one image and checks every blob's
+      # sha256 and size on the way: what is pushed below is byte for byte what
+      # build-scan scanned, or nothing is pushed. Then the platforms it holds
+      # must be exactly the ones asked for -- a leg whose archive went missing
+      # must fail here, not ship a one-platform image under a two-platform name.
+      - name: Join the scanned platforms, checking every byte
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=("$RUNNER_TEMP"/scanned/*/*.tar)
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "::error::No scanned archive was handed on by build-scan, so there is nothing to publish."
+            exit 1
+          fi
+          # The script is inline, not a file in this repository: a called
+          # workflow runs in the caller's checkout and cannot read files from
+          # here. tests/merge_oci_unit.py runs its cases against this copy.
+          python3 - "$RUNNER_TEMP/merged" "${archives[@]}" <<'PY' | tee "$RUNNER_TEMP/merged.txt"
+          #!/usr/bin/env python3
+          """Merge per-platform OCI archives into one OCI layout, so publish pushes
+          exactly the bytes build-scan scanned.
+
+              python3 merge_oci.py OUT_DIR ARCHIVE [ARCHIVE...]
+
+          Each ARCHIVE is an OCI image-layout tarball, as written by
+          `docker buildx build --platform P --provenance=false --sbom=false
+          --output type=oci,dest=X.tar`. OUT_DIR becomes one OCI layout whose index.json
+          names the result `push`:
+
+            * one platform  -> the image manifest itself, as a single-platform image was
+                               always pushed;
+            * more than one -> a new image index listing every platform's manifest.
+
+          `skopeo copy --all --preserve-digests oci:OUT_DIR:push docker://...` pushes it.
+
+          THE POINT IS THE DIGESTS. Every manifest, config and layer is copied byte for
+          byte, and every blob is checked against the sha256 and size of the descriptor
+          that names it. Nothing is re-serialised: a manifest written back through a JSON
+          library would get a new digest, and "the image we pushed is the image we
+          scanned" would stop being true while every step still went green. The only new
+          bytes are the index that lists the platforms.
+
+          Anything unexpected fails rather than being skipped: an attestation manifest,
+          a platform built twice, a descriptor whose platform contradicts its config, a
+          tar member that could write outside the directory it is unpacked into.
+          """
+
+          import hashlib
+          import json
+          import os
+          import re
+          import shutil
+          import sys
+          import tarfile
+          import tempfile
+
+          INDEX_TYPES = {
+              "application/vnd.oci.image.index.v1+json",
+              "application/vnd.docker.distribution.manifest.list.v2+json",
+          }
+          MANIFEST_TYPES = {
+              "application/vnd.oci.image.manifest.v1+json",
+              "application/vnd.docker.distribution.manifest.v2+json",
+          }
+          REF_NAME = "org.opencontainers.image.ref.name"
+          REF = "push"
+          HEX = re.compile(r"[0-9a-f]{64}")
+
+
+          class Fail(Exception):
+              pass
+
+
+          def safe_extract(archive, dest):
+              """Unpack regular files and directories only, and only inside dest."""
+              try:
+                  tar = tarfile.open(archive)
+              except (OSError, tarfile.TarError) as e:
+                  raise Fail(f"{archive}: not a readable tar archive ({e})")
+              with tar:
+                  members = tar.getmembers()
+                  for m in members:
+                      name = m.name
+                      parts = name.split("/")
+                      if name.startswith("/") or name.startswith("\\") or re.match(r"^[A-Za-z]:", name):
+                          raise Fail(f"{archive}: member {name!r} is an absolute path")
+                      if ".." in parts:
+                          raise Fail(f"{archive}: member {name!r} climbs out of the archive with '..'")
+                      if m.issym() or m.islnk():
+                          raise Fail(f"{archive}: member {name!r} is a link; an image layout has none")
+                      if not (m.isfile() or m.isdir()):
+                          raise Fail(f"{archive}: member {name!r} is not a regular file or directory")
+                  root = os.path.realpath(dest)
+                  for m in members:
+                      target = os.path.realpath(os.path.join(dest, m.name))
+                      if target != root and not target.startswith(root + os.sep):
+                          raise Fail(f"{archive}: member {m.name!r} resolves outside the archive")
+                      if m.isdir():
+                          os.makedirs(target, exist_ok=True)
+                          continue
+                      os.makedirs(os.path.dirname(target), exist_ok=True)
+                      src = tar.extractfile(m)
+                      with src, open(target, "wb") as out:
+                          shutil.copyfileobj(src, out)
+
+
+          def blob_path(root, digest):
+              algo, _, hexd = str(digest).partition(":")
+              if algo != "sha256" or not HEX.fullmatch(hexd):
+                  raise Fail(f"unsupported digest {digest!r}; only sha256 is accepted")
+              return os.path.join(root, "blobs", "sha256", hexd)
+
+
+          def verify(root, desc, what):
+              """The blob a descriptor names exists, and has its size and sha256."""
+              if not isinstance(desc, dict):
+                  raise Fail(f"{what}: descriptor is not an object")
+              digest, size = desc.get("digest"), desc.get("size")
+              path = blob_path(root, digest)
+              if not os.path.isfile(path):
+                  raise Fail(f"{what} {digest} is missing from the archive")
+              if not isinstance(size, int) or isinstance(size, bool):
+                  raise Fail(f"{what} {digest} has no integer size")
+              actual = os.path.getsize(path)
+              if actual != size:
+                  raise Fail(f"{what} {digest} is {actual} bytes; its descriptor says {size}")
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b""):
+                      h.update(chunk)
+              if "sha256:" + h.hexdigest() != digest:
+                  raise Fail(f"{what} {digest} does not hash to its digest -- its bytes changed")
+              return path
+
+
+          def load_json(path, what):
+              try:
+                  with open(path, "rb") as f:
+                      return json.loads(f.read())
+              except (OSError, ValueError) as e:
+                  raise Fail(f"{what}: unreadable JSON ({e})")
+
+
+          def norm_variant(arch, variant):
+              # arm64 and arm64/v8 are the same platform; tools disagree on which to write.
+              if arch == "arm64" and variant == "v8":
+                  return None
+              return variant or None
+
+
+          def plat_key(p):
+              return (p.get("os"), p.get("architecture"), norm_variant(p.get("architecture"), p.get("variant")))
+
+
+          def plat_str(p):
+              s = f"{p['os']}/{p['architecture']}"
+              return s + (f"/{p['variant']}" if p.get("variant") else "")
+
+
+          def attestation(desc):
+              ann = desc.get("annotations") or {}
+              plat = desc.get("platform") or {}
+              return (ann.get("vnd.docker.reference.type") == "attestation-manifest"
+                      or (plat.get("os") == "unknown" and plat.get("architecture") == "unknown"))
+
+
+          def collect(root, archive):
+              """Every image manifest in one unpacked archive, verified end to end."""
+              index = load_json(os.path.join(root, "index.json"), f"{archive}: index.json")
+              if not isinstance(index, dict) or not isinstance(index.get("manifests"), list):
+                  raise Fail(f"{archive}: index.json has no manifests list")
+              found = []
+              for d in index["manifests"]:
+                  mt = (d or {}).get("mediaType")
+                  if mt in INDEX_TYPES:
+                      nested = load_json(verify(root, d, "index"), f"{archive}: index {d.get('digest')}")
+                      for nd in (nested.get("manifests") or []):
+                          if (nd or {}).get("mediaType") in INDEX_TYPES:
+                              raise Fail(f"{archive}: an index inside an index inside an index; one level is the most a build writes")
+                          found.append(nd)
+                  elif mt in MANIFEST_TYPES:
+                      found.append(d)
+                  else:
+                      raise Fail(f"{archive}: descriptor of unknown mediaType {mt!r}")
+              images = []
+              for d in found:
+                  if attestation(d):
+                      raise Fail(f"{archive}: holds an attestation manifest. Build with "
+                                 "--provenance=false --sbom=false, so what is pushed is only what was scanned")
+                  if d.get("mediaType") not in MANIFEST_TYPES:
+                      raise Fail(f"{archive}: descriptor of unknown mediaType {d.get('mediaType')!r}")
+                  manifest = load_json(verify(root, d, "manifest"), f"manifest {d.get('digest')}")
+                  cfg_desc = manifest.get("config")
+                  config = load_json(verify(root, cfg_desc, "config"), f"config of {d.get('digest')}")
+                  plat = {"os": config.get("os"), "architecture": config.get("architecture")}
+                  if not plat["os"] or not plat["architecture"]:
+                      raise Fail(f"manifest {d['digest']}: its config names no os/architecture")
+                  if config.get("variant"):
+                      plat["variant"] = config["variant"]
+                  if "platform" in d and plat_key(d["platform"]) != plat_key(plat):
+                      raise Fail(f"manifest {d['digest']}: its descriptor says {plat_str(d['platform'])}, "
+                                 f"its config says {plat_str(plat)}")
+                  layers = manifest.get("layers")
+                  if not isinstance(layers, list):
+                      raise Fail(f"manifest {d['digest']}: no layers list")
+                  for layer in layers:
+                      verify(root, layer, "layer")
+                  desc = {"mediaType": d["mediaType"], "digest": d["digest"], "size": d["size"], "platform": plat}
+                  ann = {k: v for k, v in (d.get("annotations") or {}).items() if k != REF_NAME}
+                  if ann:
+                      desc["annotations"] = ann
+                  images.append({"root": root, "desc": desc,
+                                 "blobs": [d["digest"], cfg_desc["digest"]] + [l["digest"] for l in layers]})
+              if not images:
+                  raise Fail(f"{archive}: no image manifest in it")
+              return images
+
+
+          def copy_blob(src_root, digest, out):
+              dst = blob_path(out, digest)
+              if os.path.exists(dst):
+                  return
+              src = blob_path(src_root, digest)
+              try:
+                  os.link(src, dst)
+              except OSError:
+                  shutil.copyfile(src, dst)
+
+
+          def merge(out, archives):
+              if os.path.exists(out) and os.listdir(out):
+                  raise Fail(f"{out} exists and is not empty")
+              with tempfile.TemporaryDirectory() as tmp:
+                  images = []
+                  for n, archive in enumerate(archives):
+                      root = os.path.join(tmp, str(n))
+                      os.makedirs(root)
+                      safe_extract(archive, root)
+                      images += collect(root, archive)
+
+                  seen = {}
+                  for img in images:
+                      key = plat_key(img["desc"]["platform"])
+                      if key in seen:
+                          raise Fail(f"{plat_str(img['desc']['platform'])} is built twice "
+                                     f"({seen[key]} and {img['desc']['digest']})")
+                      seen[key] = img["desc"]["digest"]
+
+                  images.sort(key=lambda i: tuple(x or "" for x in plat_key(i["desc"]["platform"])))
+                  os.makedirs(os.path.join(out, "blobs", "sha256"), exist_ok=True)
+                  for img in images:
+                      for digest in img["blobs"]:
+                          copy_blob(img["root"], digest, out)
+
+              with open(os.path.join(out, "oci-layout"), "w") as f:
+                  json.dump({"imageLayoutVersion": "1.0.0"}, f)
+
+              lines = [f"{plat_str(i['desc']['platform'])} {i['desc']['digest']}" for i in images]
+              if len(images) == 1:
+                  top = dict(images[0]["desc"])
+                  top["annotations"] = dict(top.get("annotations") or {}, **{REF_NAME: REF})
+                  lines.append(f"manifest {top['digest']}")
+              else:
+                  body = json.dumps({
+                      "schemaVersion": 2,
+                      "mediaType": "application/vnd.oci.image.index.v1+json",
+                      "manifests": [i["desc"] for i in images],
+                  }, separators=(",", ":")).encode()
+                  digest = "sha256:" + hashlib.sha256(body).hexdigest()
+                  with open(blob_path(out, digest), "wb") as f:
+                      f.write(body)
+                  top = {"mediaType": "application/vnd.oci.image.index.v1+json", "digest": digest,
+                         "size": len(body), "annotations": {REF_NAME: REF}}
+                  lines.append(f"index {digest}")
+              with open(os.path.join(out, "index.json"), "w") as f:
+                  json.dump({"schemaVersion": 2, "manifests": [top]}, f)
+              return lines
+
+
+          def main(argv):
+              if len(argv) < 3:
+                  print("usage: merge_oci.py OUT_DIR ARCHIVE [ARCHIVE...]", file=sys.stderr)
+                  return 2
+              try:
+                  for line in merge(argv[1], argv[2:]):
+                      print(line)
+              except Fail as e:
+                  print(f"::error::{e}")
+                  return 1
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main(sys.argv))
+          PY
+
+          asked=()
+          if [ -z "${PLATFORMS:-}" ]; then
+            asked=(linux/amd64)
+          else
+            IFS=',' read -ra requested <<< "$PLATFORMS"
+            for p in "${requested[@]}"; do
+              p="$(tr -d '[:space:]' <<< "$p")"
+              [ -n "$p" ] && asked+=("$(cut -d/ -f1,2 <<< "$p")")
+            done
+          fi
+          got=$(grep -v -E '^(index|manifest) ' "$RUNNER_TEMP/merged.txt" | cut -d' ' -f1 | cut -d/ -f1,2 | sort -u)
+          want=$(printf '%s\n' "${asked[@]}" | sort -u)
+          if [ "$got" != "$want" ]; then
+            echo "::error::Asked for $(paste -sd, - <<< "$want"), but the scanned archives hold $(paste -sd, - <<< "$got"). Nothing was pushed."
+            exit 1
+          fi
+
+      - if: ${{ inputs.registry != 'ghcr.io' || inputs.also-registry != '' }}
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ inputs.workload-identity-provider }}
           service_account: ${{ inputs.service-account }}
 
-      - if: ${{ inputs.platforms != '' }}
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      # skopeo, not docker: docker can only push what it built or loaded, and
+      # loading turns the archive into a different serialisation. skopeo copies
+      # the archive's own manifests, configs and layers.
+      - name: Log in
         env:
-          RUNNER_TOOL_CACHE: ${{ runner.temp }}
-
-      - if: ${{ inputs.platforms != '' }}
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        env:
-          RUNNER_TOOL_CACHE: ${{ runner.temp }}
-
-      # A separate job that `needs` the scan, rather than a step after it. A step
-      # can be reached by a workflow edit that moves it above the scan; a job
-      # dependency cannot be satisfied by a failing scan at all.
-      - name: Publish
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          wif_login() {
+            gcloud auth print-access-token | skopeo login "${1%%/*}" -u oauth2accesstoken --password-stdin
+          }
           if [ "$REGISTRY" = ghcr.io ]; then
-            ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${IMAGE}"
-            echo "${{ github.token }}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+            printf '%s' "$GH_TOKEN" | skopeo login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           else
-            ref="${REGISTRY}/${IMAGE}"
-            gcloud auth configure-docker "${REGISTRY%%/*}" --quiet
+            wif_login "$REGISTRY"
+          fi
+          if [ -n "${ALSO_REGISTRY:-}" ]; then
+            wif_login "$ALSO_REGISTRY"
           fi
 
-          # The commit SHA is always a tag, because it is the one that can never
-          # be reused. The version is added when a release cut one — without it a
-          # published image cannot be named by the release it belongs to, which
-          # is most of the point of publishing on a release.
-          tags=(-t "${ref}:${GITHUB_SHA}")
-          if [ -n "${VERSION:-}" ]; then
-            tags+=(-t "${ref}:${VERSION}")
-          fi
-          if [ "${LATEST}" = "true" ]; then
-            tags+=(-t "${ref}:latest")
-          fi
-
-          # THE SAME ARGS THE SCANNED BUILD GOT, and that is not a convenience:
-          # build-scan's own comment says the scanned image has to be the image
-          # that would be published. Passing a profile to one build and not the
-          # other would publish a variant nothing had scanned, while the run
-          # still went green.
-          build_args=()
-          while IFS= read -r arg; do
-            [ -n "$arg" ] || continue
-            build_args+=(--build-arg "$arg")
-          done <<< "${BUILD_ARGS:-}"
-
-          # A multi-platform manifest only exists in a registry: build and push at once.
-          if [ -n "${PLATFORMS:-}" ]; then
-            docker buildx build -f "$DOCKERFILE" --platform "$PLATFORMS" \
-              ${build_args[@]+"${build_args[@]}"} "${tags[@]}" --push .
-            exit 0
-          fi
-
-          docker build -f "$DOCKERFILE" \
-            ${build_args[@]+"${build_args[@]}"} \
-            "${tags[@]}" .
-          # The version before `latest`: the version is the tag a release is
-          # named by, and a refused `latest` must not take it down with it.
-          docker push "${ref}:${GITHUB_SHA}"
-          if [ -n "${VERSION:-}" ]; then
-            docker push "${ref}:${VERSION}"
-            echo "Published ${ref}:${VERSION} and ${ref}:${GITHUB_SHA}"
+      - name: Push what was scanned
+        run: |
+          set -euo pipefail
+          src="oci:$RUNNER_TEMP/merged:push"
+          top=$(awk '$1 == "index" || $1 == "manifest" { print $2 }' "$RUNNER_TEMP/merged.txt")
+          if [ "$REGISTRY" = ghcr.io ]; then
+            primary="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${IMAGE}"
           else
-            echo "Published ${ref}:${GITHUB_SHA}"
+            primary="${REGISTRY}/${IMAGE}"
           fi
-          if [ "${LATEST}" = "true" ]; then
-            docker push "${ref}:latest"
+
+          # --preserve-digests: a registry that would have to rewrite a
+          # manifest makes this fail, rather than store something nobody
+          # scanned. Then the registry is asked what it now holds, and it must
+          # be the digest the join above produced.
+          push() {
+            skopeo copy --all --preserve-digests --retry-times 3 "$src" "docker://$1"
+            held="sha256:$(skopeo inspect --raw "docker://$1" | sha256sum | cut -d' ' -f1)"
+            if [ "$held" != "$top" ]; then
+              echo "::error::$1 now holds $held, not the scanned $top."
+              exit 1
+            fi
+            echo "Published $1 ($top)"
+            echo "| \`$1\` | \`$top\` |" >> "$RUNNER_TEMP/published.md"
+          }
+
+          # The commit SHA first: it is the tag that can never be reused. Then
+          # the version a release is named by. `latest` last and only on the
+          # primary registry, so a refused `latest` cannot take the version
+          # down with it.
+          push "${primary}:${GITHUB_SHA}"
+          [ -z "${VERSION:-}" ] || push "${primary}:${VERSION}"
+          [ "${LATEST}" != true ] || push "${primary}:latest"
+
+          # The second registry gets the same bytes and never `latest`: it is
+          # for a registry with tag immutability, where a moving tag is refused.
+          if [ -n "${ALSO_REGISTRY:-}" ]; then
+            also="${ALSO_REGISTRY}/${IMAGE}"
+            push "${also}:${GITHUB_SHA}"
+            [ -z "${VERSION:-}" ] || push "${also}:${VERSION}"
           fi
+
+          {
+            echo "### container-ci / publish"
+            echo
+            echo "Pushed what build-scan scanned; nothing was rebuilt."
+            echo
+            echo "| Pushed | Digest |"
+            echo "|---|---|"
+            cat "$RUNNER_TEMP/published.md"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/merged.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
