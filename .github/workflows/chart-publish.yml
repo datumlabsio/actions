@@ -50,6 +50,9 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] || { echo "::error::version '$VERSION' is not vX.Y.Z"; exit 1; }
+          # --app-version sets only the chart being packaged. Write it into every
+          # Chart.yaml first, so a chart bundled inside another carries it too.
+          sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" "$CHARTS_DIR"/*/Chart.yaml
           for chart in "$CHARTS_DIR"/*/; do
             [ -f "$chart/Chart.yaml" ] || continue
             helm lint "$chart"
